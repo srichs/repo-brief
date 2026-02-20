@@ -6,6 +6,7 @@ import re
 import sys
 import textwrap
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -37,6 +38,7 @@ ENV_PRICE_CACHED_IN = os.getenv("PRICE_CACHED_IN_PER_1M")
 # ----------------------------
 # GitHub helpers
 # ----------------------------
+
 
 def _parse_github_repo_url(repo_url: str) -> Tuple[str, str]:
     m = re.match(r"^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", repo_url.strip())
@@ -181,18 +183,14 @@ def get_final_text(run_result) -> str:
             val = getattr(run_result, attr)
             if isinstance(val, str) and val.strip():
                 return val
-    # Some versions store messages; last resort:
     if hasattr(run_result, "messages"):
         msgs = getattr(run_result, "messages") or []
-        # try to pull last assistant message text
         for m in reversed(msgs):
-            # best-effort: dict-like or object-like
             if isinstance(m, dict):
                 content = m.get("content")
                 if isinstance(content, str) and content.strip():
                     return content
                 if isinstance(content, list):
-                    # OpenAI-style content blocks
                     texts = []
                     for c in content:
                         if isinstance(c, dict) and c.get("type") in ("output_text", "text"):
@@ -212,6 +210,7 @@ def get_final_text(run_result) -> str:
 # ----------------------------
 # Tool functions (Agents SDK)
 # ----------------------------
+
 
 def _fetch_repo_context_impl(
     repo_url: str,
@@ -326,6 +325,7 @@ def fetch_files(repo_url: str, paths: List[str], max_file_chars: int = 16000) ->
 # ----------------------------
 # Cost + Budget guard
 # ----------------------------
+
 
 @dataclass
 class Pricing:
@@ -486,7 +486,7 @@ def _json_or_fallback(text: str, fallback_key: str = "briefing_markdown") -> Dic
         obj = json.loads(text)
         if isinstance(obj, dict):
             return obj
-    except Exception:
+    except json.JSONDecodeError:
         pass
     return {fallback_key: text, "files_to_inspect": []}
 
@@ -494,6 +494,7 @@ def _json_or_fallback(text: str, fallback_key: str = "briefing_markdown") -> Dic
 # ----------------------------
 # Main orchestration loop
 # ----------------------------
+
 
 def run_briefing_loop(
     repo_url: str,
@@ -508,9 +509,8 @@ def run_briefing_loop(
     accumulated_cost = 0.0
     total_requests = 0
 
-    # 1) Overview
     overview_prompt = f"Analyze this repo and produce the JSON output: {repo_url}"
-    overview_result = Runner.run_sync(OverviewAgent, overview_prompt, max_turns=max_turns)
+    overview_result = Runner.run_sync(OverviewAgent, overview_prompt, max_turns=max_turns )
     overview_usage = usage_totals(overview_result)
     overview_cost = estimate_cost_usd(overview_result, pricing)
 
@@ -522,9 +522,6 @@ def run_briefing_loop(
     briefing = data.get("briefing_markdown", "")
     files_to_inspect = data.get("files_to_inspect", []) or []
 
-    # Also capture repo context from the tool output indirectly by fetching it once here
-    # (We do this to give the reading-plan agent concrete paths to cite later.)
-    # This is deterministic and doesn’t rely on the model to preserve file lists.
     repo_context = _fetch_repo_context_impl(repo_url)
 
     def budget_exceeded() -> bool:
@@ -534,7 +531,6 @@ def run_briefing_loop(
             return True
         return False
 
-    # 2) Deep dive loop
     it = 0
     while it < max_iters and files_to_inspect and not budget_exceeded():
         it += 1
@@ -549,7 +545,7 @@ def run_briefing_loop(
             ensure_ascii=False,
         )
 
-        deep_result = Runner.run_sync(DeepDiveAgent, deep_prompt, max_turns=max_turns)
+        deep_result = Runner.run_sync(DeepDiveAgent, deep_prompt, max_turns=max_turns )
         deep_usage = usage_totals(deep_result)
         deep_cost = estimate_cost_usd(deep_result, pricing)
 
@@ -561,7 +557,6 @@ def run_briefing_loop(
         briefing = data2.get("briefing_markdown", briefing)
         files_to_inspect = data2.get("files_to_inspect", []) or []
 
-    # 3) Reading plan agent
     reading_plan_markdown = ""
     if not budget_exceeded():
         rp_prompt = json.dumps(
@@ -574,7 +569,7 @@ def run_briefing_loop(
             },
             ensure_ascii=False,
         )
-        rp_result = Runner.run_sync(ReadingPlanAgent, rp_prompt, max_turns=max_turns)
+        rp_result = Runner.run_sync(ReadingPlanAgent, rp_prompt, max_turns=max_turns )
         rp_usage = usage_totals(rp_result)
         rp_cost = estimate_cost_usd(rp_result, pricing)
 
@@ -609,29 +604,63 @@ def run_briefing_loop(
     }
 
 
-# ----------------------------
-# CLI
-# ----------------------------
+def _render_output(result: Dict[str, Any], output_format: str) -> str:
+    if output_format == "json":
+        return json.dumps(result, indent=2, ensure_ascii=False)
 
-def main() -> None:
+    parts = [result["briefing_markdown"].rstrip()]
+    if result.get("reading_plan_markdown"):
+        parts.append(result["reading_plan_markdown"].rstrip())
+
+    parts.extend(
+        [
+            "---",
+            f"- Estimated cost: ${result['usage']['estimated_cost_usd']}",
+            f"- Tokens: {result['usage']['total_tokens']}",
+            f"- Requests: {result['usage']['requests']}",
+            f"- Stopped reason: {result['stopped_reason']}",
+        ]
+    )
+    return "\n\n".join(parts)
+
+
+def _write_output(output_text: str, output_path: Optional[str]) -> None:
+    if not output_path:
+        print(output_text)
+        return
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(output_text + "\n", encoding="utf-8")
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Multi-agent GitHub repo briefing: URL -> 80% understanding (overview + deep-dive loop + reading plan)."
+        prog="repo-brief",
+        description="Multi-agent GitHub repo briefing: URL -> 80% understanding (overview + deep-dive + reading plan).",
     )
     parser.add_argument("repo_url", help="e.g. https://github.com/OWNER/REPO")
-    parser.add_argument("--model", default="gpt-4.1-mini", help="Model name (must match your org’s enabled models).")
+    parser.add_argument("--model", default="gpt-4.1-mini", help="Model name (must match your org's enabled models).")
     parser.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Output format.")
-
+    parser.add_argument("--output", help="Write output to a file instead of stdout.")
     parser.add_argument("--max-iters", type=int, default=2, help="Deep-dive iterations after overview.")
     parser.add_argument("--max-turns", type=int, default=12, help="Max turns per agent run.")
-
     parser.add_argument("--max-cost", type=float, default=0.0, help="Stop if estimated cost >= this USD (0 disables).")
     parser.add_argument("--max-tokens", type=int, default=0, help="Stop if total tokens >= this (0 disables).")
-
     parser.add_argument("--price-in", type=float, default=None, help="Override input $/1M tokens.")
     parser.add_argument("--price-out", type=float, default=None, help="Override output $/1M tokens.")
     parser.add_argument("--price-cached-in", type=float, default=None, help="Override cached input $/1M tokens.")
+    return parser
 
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
+
+    try:
+        _parse_github_repo_url(args.repo_url)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     if not os.getenv("OPENAI_API_KEY"):
         print("ERROR: OPENAI_API_KEY not found. Put it in .env or your environment.", file=sys.stderr)
@@ -639,28 +668,26 @@ def main() -> None:
 
     pricing = Pricing.for_model(args.model, args.price_in, args.price_out, args.price_cached_in)
 
-    result = run_briefing_loop(
-        repo_url=args.repo_url,
-        model=args.model,
-        max_iters=max(0, args.max_iters),
-        max_turns=max(1, args.max_turns),
-        max_cost=max(0.0, args.max_cost),
-        max_tokens=max(0, args.max_tokens),
-        pricing=pricing,
-    )
-
-    if args.format == "json":
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-    else:
-        print(result["briefing_markdown"].rstrip())
-        if result.get("reading_plan_markdown"):
-            print("\n\n" + result["reading_plan_markdown"].rstrip())
-
-        print("\n---")
-        print(f"- Estimated cost: ${result['usage']['estimated_cost_usd']}")
-        print(f"- Tokens: {result['usage']['total_tokens']}")
-        print(f"- Requests: {result['usage']['requests']}")
-        print(f"- Stopped reason: {result['stopped_reason']}")
+    try:
+        result = run_briefing_loop(
+            repo_url=args.repo_url,
+            model=args.model,
+            max_iters=max(0, args.max_iters),
+            max_turns=max(1, args.max_turns),
+            max_cost=max(0.0, args.max_cost),
+            max_tokens=max(0, args.max_tokens),
+            pricing=pricing,
+        )
+        _write_output(_render_output(result, args.format), args.output)
+    except requests.HTTPError as exc:
+        print(f"ERROR: GitHub API request failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("Interrupted by user.", file=sys.stderr)
+        sys.exit(130)
+    except Exception as exc:
+        print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
