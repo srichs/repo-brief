@@ -383,7 +383,11 @@ class Pricing:
             )
 
         entry = DEFAULT_PRICING_PER_1M.get(model, DEFAULT_PRICING_PER_1M["_default"])
-        return Pricing(in_per_1m=entry["in"], out_per_1m=entry["out"], cached_in_per_1m=entry.get("cached_in", 0.0))
+        return Pricing(
+            in_per_1m=entry["in"],
+            out_per_1m=entry["out"],
+            cached_in_per_1m=entry.get("cached_in", 0.0),
+        )
 
 
 def usage_totals(result: Any) -> Dict[str, int]:
@@ -610,7 +614,8 @@ def run_briefing_loop(
 
     stopped_reason = (
         "budget_exceeded"
-        if (max_tokens > 0 and accumulated_tokens >= max_tokens) or (max_cost > 0 and accumulated_cost >= max_cost)
+        if (max_tokens > 0 and accumulated_tokens >= max_tokens)
+        or (max_cost > 0 and accumulated_cost >= max_cost)
         else "completed"
     )
 
@@ -670,16 +675,33 @@ def build_parser() -> argparse.ArgumentParser:
         description="Multi-agent GitHub repo briefing: URL -> 80% understanding (overview + deep-dive + reading plan).",
     )
     parser.add_argument("repo_url", help="e.g. https://github.com/OWNER/REPO")
-    parser.add_argument("--model", default="gpt-4.1-mini", help="Model name (must match your org's enabled models).")
-    parser.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Output format.")
+    parser.add_argument(
+        "--model", default="gpt-4.1-mini", help="Model name (must match your org's enabled models)."
+    )
+    parser.add_argument(
+        "--format", choices=["markdown", "json"], default="markdown", help="Output format."
+    )
     parser.add_argument("--output", help="Write output to a file instead of stdout.")
-    parser.add_argument("--max-iters", type=int, default=2, help="Deep-dive iterations after overview.")
+    parser.add_argument(
+        "--max-iters", type=int, default=2, help="Deep-dive iterations after overview."
+    )
     parser.add_argument("--max-turns", type=int, default=12, help="Max turns per agent run.")
-    parser.add_argument("--max-cost", type=float, default=0.0, help="Stop if estimated cost >= this USD (0 disables).")
-    parser.add_argument("--max-tokens", type=int, default=0, help="Stop if total tokens >= this (0 disables).")
+    parser.add_argument(
+        "--max-cost",
+        type=float,
+        default=0.0,
+        help="Stop if estimated cost >= this USD (0 disables).",
+    )
+    parser.add_argument(
+        "--max-tokens", type=int, default=0, help="Stop if total tokens >= this (0 disables)."
+    )
     parser.add_argument("--price-in", type=float, default=None, help="Override input $/1M tokens.")
-    parser.add_argument("--price-out", type=float, default=None, help="Override output $/1M tokens.")
-    parser.add_argument("--price-cached-in", type=float, default=None, help="Override cached input $/1M tokens.")
+    parser.add_argument(
+        "--price-out", type=float, default=None, help="Override output $/1M tokens."
+    )
+    parser.add_argument(
+        "--price-cached-in", type=float, default=None, help="Override cached input $/1M tokens."
+    )
     return parser
 
 
@@ -695,7 +717,9 @@ def main() -> None:
         sys.exit(2)
 
     if not os.getenv("OPENAI_API_KEY"):
-        print("ERROR: OPENAI_API_KEY not found. Put it in .env or your environment.", file=sys.stderr)
+        print(
+            "ERROR: OPENAI_API_KEY not found. Put it in .env or your environment.", file=sys.stderr
+        )
         sys.exit(2)
 
     pricing = Pricing.for_model(args.model, args.price_in, args.price_out, args.price_cached_in)
