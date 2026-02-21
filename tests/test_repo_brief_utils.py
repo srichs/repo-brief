@@ -96,7 +96,7 @@ def test_cli_version_flag_prints_version_and_exits_zero(
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 0
-    assert captured.out.strip() == f"repo-brief {__version__}"
+    assert captured.out.strip() == __version__
 
 
 def test_cli_exits_with_code_2_when_openai_api_key_missing(
@@ -347,6 +347,7 @@ def test_safe_get_json_raises_clear_error_on_rate_limit(monkeypatch: pytest.Monk
     message = str(exc_info.value)
     assert "Set GITHUB_TOKEN" in message
     assert "1700000000" in message
+    assert "UTC" in message
 
 
 def test_render_output_mentions_skipped_reading_plan_on_budget_limit() -> None:
@@ -399,3 +400,109 @@ def test_cli_passes_context_limit_flags(monkeypatch: pytest.MonkeyPatch) -> None
     assert captured["max_tree_entries"] == 222
     assert captured["max_key_files"] == 9
     assert captured["max_file_chars"] == 333
+
+
+def test_cli_verbose_writes_diagnostics_to_stderr_only(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_run_briefing_loop(**kwargs: object) -> dict[str, object]:
+        diagnostics = kwargs.get("diagnostics")
+        assert callable(diagnostics)
+        diagnostics("stage: overview")
+        diagnostics("repo context: default_branch=main tree_entries=1 key_files=['README.md']")
+        return {
+            "briefing_markdown": "brief",
+            "reading_plan_markdown": "plan",
+            "usage": {"estimated_cost_usd": 0.0, "total_tokens": 0, "requests": 1},
+            "stopped_reason": "completed",
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(workflow, "run_briefing_loop", fake_run_briefing_loop)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "sys.argv",
+        ["repo-brief", "https://github.com/openai/openai-python", "--verbose"],
+    )
+
+    cli.main()
+
+    captured = capsys.readouterr()
+    assert "brief" in captured.out
+    assert "stage: overview" in captured.err
+    assert "parsed repo: owner=openai, repo=openai-python" in captured.err
+
+
+def test_run_briefing_loop_invalid_overview_json_schema_falls_back_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_repo_context(repo_url: str, **_kwargs: object) -> dict[str, object]:
+        del repo_url
+        return {
+            "tree_summary": "📄 README.md",
+            "key_files": ["README.md"],
+            "default_branch": "main",
+        }
+
+    def fake_run_sync(
+        agent: object,
+        prompt: str,
+        max_turns: int,
+        run_config: object,
+    ) -> _DummyResult:
+        del prompt, max_turns, run_config
+        if agent is workflow.OverviewAgent:
+            return _DummyResult({"files_to_inspect": ["README.md"]})
+        return _DummyResult({"reading_plan_markdown": "plan"})
+
+    monkeypatch.setattr(workflow, "fetch_repo_context_impl", fake_repo_context)
+    monkeypatch.setattr(workflow.Runner, "run_sync", fake_run_sync)
+    monkeypatch.setattr(
+        workflow, "usage_totals", lambda _result: {"total_tokens": 0, "requests": 1}
+    )
+    monkeypatch.setattr(workflow, "estimate_cost_usd", lambda _result, _pricing: 0.0)
+
+    result = workflow.run_briefing_loop(
+        repo_url="https://github.com/openai/openai-python",
+        model="gpt-4.1",
+        max_iters=1,
+        max_turns=1,
+        max_cost=0.0,
+        max_tokens=0,
+        pricing=SimpleNamespace(in_per_1m=0.0, out_per_1m=0.0, cached_in_per_1m=0.0),
+    )
+
+    assert result["briefing_markdown"] == '{"files_to_inspect": ["README.md"]}'
+    assert any(
+        "overview stage returned invalid JSON schema" in warning for warning in result["warnings"]
+    )
+
+
+def test_fetch_files_impl_uses_provided_default_branch_without_repo_metadata_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    call_counter = {"repo_meta": 0}
+
+    def fake_safe_get_json(url: str, **_kwargs: object) -> dict[str, object]:
+        if url.endswith("/repos/openai/openai-python"):
+            call_counter["repo_meta"] += 1
+            return {"default_branch": "main"}
+        return {"type": "file", "content": ""}
+
+    monkeypatch.setattr(github_client, "safe_get_json", fake_safe_get_json)
+    monkeypatch.setattr(
+        github_client,
+        "fetch_file_content",
+        lambda owner, repo, path, ref, max_chars: f"{owner}/{repo}:{path}@{ref}:{max_chars}",
+    )
+
+    payload = github_client.fetch_files_impl(
+        repo_url="https://github.com/openai/openai-python",
+        paths=["README.md"],
+        max_file_chars=42,
+        default_branch="develop",
+    )
+
+    assert call_counter["repo_meta"] == 0
+    assert payload["default_branch"] == "develop"
+    assert payload["files"]["README.md"].endswith("@develop:42")

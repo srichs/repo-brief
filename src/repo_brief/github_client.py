@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import json
 import os
 import random
@@ -57,7 +58,15 @@ def _retry_after_seconds(retry_after: str | None) -> float | None:
 
 def _rate_limit_error(url: str, response: requests.Response) -> RuntimeError:
     reset_unix = response.headers.get("X-RateLimit-Reset")
-    reset_hint = f" Reset time (unix): {reset_unix}." if reset_unix else ""
+    reset_hint = ""
+    if reset_unix:
+        try:
+            reset_dt = dt.datetime.fromtimestamp(int(reset_unix), tz=dt.timezone.utc)
+            reset_hint = (
+                f" Reset time: {reset_dt.strftime('%Y-%m-%d %H:%M:%S UTC')} (unix: {reset_unix})."
+            )
+        except ValueError:
+            reset_hint = f" Reset time (unix): {reset_unix}."
     return RuntimeError(
         "GitHub API rate limit exceeded while requesting "
         f"{url}. Set GITHUB_TOKEN to raise your limits.{reset_hint}"
@@ -324,12 +333,17 @@ def fetch_repo_context_impl(
 
 
 def fetch_files_impl(
-    repo_url: str, paths: list[str], max_file_chars: int = 16000
+    repo_url: str,
+    paths: list[str],
+    max_file_chars: int = 16000,
+    default_branch: str | None = None,
 ) -> dict[str, Any]:
     """Fetch selected files from a repository default branch."""
     owner, repo = parse_github_repo_url(repo_url)
-    repo_meta = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}")
-    default_branch = repo_meta.get("default_branch", "main")
+    selected_default_branch = default_branch
+    if not selected_default_branch:
+        repo_meta = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}")
+        selected_default_branch = repo_meta.get("default_branch", "main")
 
     out: dict[str, str] = {}
     for path in paths:
@@ -338,9 +352,13 @@ def fetch_files_impl(
             continue
         try:
             out[cleaned_path] = fetch_file_content(
-                owner, repo, cleaned_path, default_branch, max_file_chars
+                owner, repo, cleaned_path, selected_default_branch, max_file_chars
             )
         except Exception as error:  # pragma: no cover - defensive behavior unchanged
             out[cleaned_path] = f"[Could not fetch {cleaned_path}: {type(error).__name__}]"
 
-    return {"repo_url": repo_url, "default_branch": default_branch, "files": out}
+    return {
+        "repo_url": repo_url,
+        "default_branch": selected_default_branch,
+        "files": out,
+    }

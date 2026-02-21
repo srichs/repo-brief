@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from collections.abc import Callable
 from typing import Any
 
 from agents import Agent, RunConfig, Runner, function_tool
@@ -31,9 +32,19 @@ def fetch_repo_context(
 
 
 @function_tool
-def fetch_files(repo_url: str, paths: list[str], max_file_chars: int = 16000) -> dict[str, Any]:
+def fetch_files(
+    repo_url: str,
+    paths: list[str],
+    max_file_chars: int = 16000,
+    default_branch: str | None = None,
+) -> dict[str, Any]:
     """Agents tool wrapper for fetching specific repository files."""
-    return fetch_files_impl(repo_url=repo_url, paths=paths, max_file_chars=max_file_chars)
+    return fetch_files_impl(
+        repo_url=repo_url,
+        paths=paths,
+        max_file_chars=max_file_chars,
+        default_branch=default_branch,
+    )
 
 
 OverviewAgent = Agent(
@@ -76,11 +87,13 @@ DeepDiveAgent = Agent(
         """
         You are a staff engineer. You will be given:
         - the repo URL
+        - the repository default branch
         - the current briefing (markdown)
         - a list of file paths to fetch
 
         Use the tool to fetch those files, then improve the briefing with sharper, more
         accurate details. Be explicit about what is supported by the files vs inferred.
+        When calling the tool, pass through the default branch provided in the input.
 
         OUTPUT MUST BE VALID JSON with this schema:
         {
@@ -172,6 +185,31 @@ def json_or_fallback(text: str, fallback_key: str = "briefing_markdown") -> dict
     return {fallback_key: text, "files_to_inspect": []}
 
 
+def _is_string_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def validate_overview_output(payload: dict[str, Any]) -> bool:
+    """Validate overview-agent JSON schema."""
+    return isinstance(payload.get("briefing_markdown"), str) and _is_string_list(
+        payload.get("files_to_inspect")
+    )
+
+
+def validate_deep_dive_output(payload: dict[str, Any]) -> bool:
+    """Validate deep-dive JSON schema."""
+    if not isinstance(payload.get("briefing_markdown"), str):
+        return False
+    if "files_to_inspect" not in payload:
+        return True
+    return _is_string_list(payload.get("files_to_inspect"))
+
+
+def validate_reading_plan_output(payload: dict[str, Any]) -> bool:
+    """Validate reading-plan JSON schema."""
+    return isinstance(payload.get("reading_plan_markdown"), str)
+
+
 def run_briefing_loop(
     repo_url: str,
     model: str,
@@ -184,8 +222,15 @@ def run_briefing_loop(
     max_tree_entries: int = 350,
     max_key_files: int = 12,
     max_file_chars: int = 12000,
+    verbose: bool = False,
+    diagnostics: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Run overview, deep-dive, and reading-plan stages with budget guards."""
+
+    def log(message: str) -> None:
+        if verbose and diagnostics is not None:
+            diagnostics(message)
+
     repo_context = fetch_repo_context_impl(
         repo_url,
         max_readme_chars=max_readme_chars,
@@ -193,10 +238,17 @@ def run_briefing_loop(
         max_key_files=max_key_files,
         max_file_chars=max_file_chars,
     )
+    log(
+        "repo context: "
+        f"default_branch={repo_context.get('default_branch', 'main')} "
+        f"tree_entries={len(repo_context.get('tree_summary', '').splitlines())} "
+        f"key_files={repo_context.get('key_files', [])}"
+    )
 
     accumulated_tokens = 0
     accumulated_cost = 0.0
     total_requests = 0
+    warnings: list[str] = []
 
     overview_prompt = json.dumps(
         {
@@ -206,6 +258,7 @@ def run_briefing_loop(
         },
         ensure_ascii=False,
     )
+    log("stage: overview")
     overview_result = Runner.run_sync(
         OverviewAgent,
         overview_prompt,
@@ -219,7 +272,11 @@ def run_briefing_loop(
     accumulated_cost += overview_cost
     total_requests += overview_usage["requests"]
 
-    data = json_or_fallback(get_final_text(overview_result))
+    overview_text = get_final_text(overview_result)
+    data = json_or_fallback(overview_text)
+    if not validate_overview_output(data):
+        warnings.append("overview stage returned invalid JSON schema; used text fallback")
+        data = {"briefing_markdown": overview_text, "files_to_inspect": []}
     briefing = data.get("briefing_markdown", "")
     files_to_inspect = data.get("files_to_inspect", []) or []
 
@@ -235,6 +292,7 @@ def run_briefing_loop(
         deep_prompt = json.dumps(
             {
                 "repo_url": repo_url,
+                "default_branch": repo_context.get("default_branch", "main"),
                 "current_briefing_markdown": briefing,
                 "inspect_these_paths": files_to_inspect,
                 "instruction": "Fetch these files and improve the briefing JSON output.",
@@ -242,6 +300,7 @@ def run_briefing_loop(
             ensure_ascii=False,
         )
 
+        log(f"stage: deep dive {it}")
         deep_result = Runner.run_sync(
             DeepDiveAgent,
             deep_prompt,
@@ -255,7 +314,13 @@ def run_briefing_loop(
         accumulated_cost += deep_cost
         total_requests += deep_usage["requests"]
 
-        data2 = json_or_fallback(get_final_text(deep_result))
+        deep_text = get_final_text(deep_result)
+        data2 = json_or_fallback(deep_text)
+        if not validate_deep_dive_output(data2):
+            warnings.append(
+                f"deep dive {it} stage returned invalid JSON schema; used text fallback"
+            )
+            data2 = {"briefing_markdown": deep_text, "files_to_inspect": []}
         briefing = data2.get("briefing_markdown", briefing)
         files_to_inspect = data2.get("files_to_inspect", []) or []
 
@@ -271,6 +336,7 @@ def run_briefing_loop(
             },
             ensure_ascii=False,
         )
+        log("stage: reading plan")
         rp_result = Runner.run_sync(
             ReadingPlanAgent,
             rp_prompt,
@@ -284,7 +350,11 @@ def run_briefing_loop(
         accumulated_cost += rp_cost
         total_requests += rp_usage["requests"]
 
-        rp_data = json_or_fallback(get_final_text(rp_result), fallback_key="reading_plan_markdown")
+        reading_plan_text = get_final_text(rp_result)
+        rp_data = json_or_fallback(reading_plan_text, fallback_key="reading_plan_markdown")
+        if not validate_reading_plan_output(rp_data):
+            warnings.append("reading plan stage returned invalid JSON schema; used text fallback")
+            rp_data = {"reading_plan_markdown": reading_plan_text, "files_to_inspect": []}
         reading_plan_markdown = rp_data.get("reading_plan_markdown", "")
 
     stopped_reason = (
@@ -309,4 +379,5 @@ def run_briefing_loop(
             "requests": total_requests,
         },
         "stopped_reason": stopped_reason,
+        "warnings": warnings,
     }
