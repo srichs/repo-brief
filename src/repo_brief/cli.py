@@ -1,0 +1,141 @@
+"""CLI entrypoint and output rendering for repo-brief."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+
+from .agents_workflow import run_briefing_loop
+from .budget import Pricing, validate_price_overrides
+from .github_client import parse_github_repo_url
+
+load_dotenv()
+
+
+def render_output(result: dict[str, Any], output_format: str) -> str:
+    """Render orchestrated results as JSON or markdown output."""
+    if output_format == "json":
+        return json.dumps(result, indent=2, ensure_ascii=False)
+
+    parts = [result["briefing_markdown"].rstrip()]
+    if result.get("reading_plan_markdown"):
+        parts.append(result["reading_plan_markdown"].rstrip())
+
+    parts.extend(
+        [
+            "---",
+            f"- Estimated cost: ${result['usage']['estimated_cost_usd']}",
+            f"- Tokens: {result['usage']['total_tokens']}",
+            f"- Requests: {result['usage']['requests']}",
+            f"- Stopped reason: {result['stopped_reason']}",
+        ]
+    )
+    return "\n\n".join(parts)
+
+
+def write_output(output_text: str, output_path: str | None) -> None:
+    """Write rendered output to stdout or a file path."""
+    if not output_path:
+        print(output_text)
+        return
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(output_text + "\n", encoding="utf-8")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build and return the command-line parser for ``repo-brief``."""
+    parser = argparse.ArgumentParser(
+        prog="repo-brief",
+        description=(
+            "Multi-agent GitHub repo briefing: URL -> 80% understanding "
+            "(overview + deep-dive + reading plan)."
+        ),
+    )
+    parser.add_argument("repo_url", help="e.g. https://github.com/OWNER/REPO")
+    parser.add_argument(
+        "--model",
+        default="gpt-4.1-mini",
+        help="Model name (must match your org's enabled models).",
+    )
+    parser.add_argument(
+        "--format", choices=["markdown", "json"], default="markdown", help="Output format."
+    )
+    parser.add_argument("--output", help="Write output to a file instead of stdout.")
+    parser.add_argument(
+        "--max-iters", type=int, default=2, help="Deep-dive iterations after overview."
+    )
+    parser.add_argument("--max-turns", type=int, default=12, help="Max turns per agent run.")
+    parser.add_argument(
+        "--max-cost",
+        type=float,
+        default=0.0,
+        help="Stop if estimated cost >= this USD (0 disables).",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=0,
+        help="Stop if total tokens >= this (0 disables).",
+    )
+    parser.add_argument("--price-in", type=float, default=None, help="Override input $/1M tokens.")
+    parser.add_argument(
+        "--price-out", type=float, default=None, help="Override output $/1M tokens."
+    )
+    parser.add_argument(
+        "--price-cached-in",
+        type=float,
+        default=None,
+        help="Override cached input $/1M tokens.",
+    )
+    return parser
+
+
+def main() -> None:
+    """CLI entrypoint with validation, orchestration, and error handling."""
+    parser = build_parser()
+    args = parser.parse_args()
+
+    try:
+        parse_github_repo_url(args.repo_url)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    if not os.getenv("OPENAI_API_KEY"):
+        print(
+            "ERROR: OPENAI_API_KEY not found. Put it in .env or your environment.", file=sys.stderr
+        )
+        sys.exit(2)
+
+    try:
+        validate_price_overrides(args.price_in, args.price_out)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    pricing = Pricing.for_model(args.model, args.price_in, args.price_out, args.price_cached_in)
+
+    try:
+        result = run_briefing_loop(
+            repo_url=args.repo_url,
+            model=args.model,
+            max_iters=max(0, args.max_iters),
+            max_turns=max(1, args.max_turns),
+            max_cost=max(0.0, args.max_cost),
+            max_tokens=max(0, args.max_tokens),
+            pricing=pricing,
+        )
+        write_output(render_output(result, args.format), args.output)
+    except KeyboardInterrupt:
+        print("Interrupted by user.", file=sys.stderr)
+        sys.exit(130)
+    except Exception as exc:
+        print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        sys.exit(1)
