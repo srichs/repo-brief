@@ -42,6 +42,16 @@ Useful options
 - ``--format``: ``markdown`` or ``json`` output.
 - ``--output``: Write output to a file.
 
+Context-size controls
+---------------------
+
+Use these to tune how much repository context is fetched before agent orchestration:
+
+- ``--max-readme-chars`` (default ``12000``): Maximum README characters in context.
+- ``--max-tree-entries`` (default ``350``): Maximum repository tree paths in summary output.
+- ``--max-key-files`` (default ``12``): Maximum number of representative files sampled.
+- ``--max-file-chars`` (default ``12000``): Maximum content characters captured per sampled file.
+
 JSON output example
 -------------------
 

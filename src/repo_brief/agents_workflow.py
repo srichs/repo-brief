@@ -180,9 +180,19 @@ def run_briefing_loop(
     max_cost: float,
     max_tokens: int,
     pricing: Pricing,
+    max_readme_chars: int = 12000,
+    max_tree_entries: int = 350,
+    max_key_files: int = 12,
+    max_file_chars: int = 12000,
 ) -> dict[str, Any]:
     """Run overview, deep-dive, and reading-plan stages with budget guards."""
-    repo_context = fetch_repo_context_impl(repo_url)
+    repo_context = fetch_repo_context_impl(
+        repo_url,
+        max_readme_chars=max_readme_chars,
+        max_tree_entries=max_tree_entries,
+        max_key_files=max_key_files,
+        max_file_chars=max_file_chars,
+    )
 
     accumulated_tokens = 0
     accumulated_cost = 0.0
