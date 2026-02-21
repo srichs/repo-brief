@@ -402,6 +402,35 @@ def test_cli_passes_context_limit_flags(monkeypatch: pytest.MonkeyPatch) -> None
     assert captured["max_file_chars"] == 333
 
 
+def test_cli_passes_ref_to_run_briefing_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_briefing_loop(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "briefing_markdown": "brief",
+            "reading_plan_markdown": "",
+            "usage": {"estimated_cost_usd": 0.0, "total_tokens": 0, "requests": 1},
+            "stopped_reason": "completed",
+        }
+
+    monkeypatch.setattr(workflow, "run_briefing_loop", fake_run_briefing_loop)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "repo-brief",
+            "https://github.com/openai/openai-python",
+            "--ref",
+            "release/v1",
+        ],
+    )
+
+    cli.main()
+
+    assert captured["ref"] == "release/v1"
+
+
 def test_cli_verbose_writes_diagnostics_to_stderr_only(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -476,6 +505,40 @@ def test_run_briefing_loop_invalid_overview_json_schema_falls_back_with_warning(
     assert any(
         "overview stage returned invalid JSON schema" in warning for warning in result["warnings"]
     )
+
+
+def test_fetch_repo_context_impl_uses_provided_ref_without_repo_metadata_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    call_counter = {"repo_meta": 0}
+
+    def fake_safe_get_json(url: str, **_kwargs: object) -> dict[str, object]:
+        if url.endswith("/repos/openai/openai-python"):
+            call_counter["repo_meta"] += 1
+            return {"default_branch": "main"}
+        if "/branches/" in url:
+            return {"commit": {"commit": {"tree": {"sha": "tree123"}}}}
+        if "/git/trees/tree123" in url:
+            return {"tree": [{"path": "README.md", "type": "blob"}]}
+        if "/readme" in url:
+            return {"content": ""}
+        return {"type": "file", "content": ""}
+
+    monkeypatch.setattr(github_client, "safe_get_json", fake_safe_get_json)
+    monkeypatch.setattr(
+        github_client,
+        "fetch_file_content",
+        lambda owner, repo, path, ref, max_chars: f"{owner}/{repo}:{path}@{ref}:{max_chars}",
+    )
+
+    payload = github_client.fetch_repo_context_impl(
+        repo_url="https://github.com/openai/openai-python",
+        ref="feature/ref-support",
+        max_key_files=1,
+    )
+
+    assert call_counter["repo_meta"] == 0
+    assert payload["ref"] == "feature/ref-support"
 
 
 def test_fetch_files_impl_uses_provided_default_branch_without_repo_metadata_call(

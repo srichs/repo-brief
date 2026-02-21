@@ -57,6 +57,12 @@ repo-brief https://github.com/OWNER/REPO \
   --output artifacts/repo-brief.json
 ```
 
+### Analyze a specific branch/tag/commit
+
+```bash
+repo-brief https://github.com/OWNER/REPO --ref feature/new-flow
+```
+
 ## Development
 
 Install development tooling and configure hooks:
