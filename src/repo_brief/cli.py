@@ -84,6 +84,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Stop if total tokens >= this (0 disables).",
     )
+    parser.add_argument(
+        "--max-readme-chars",
+        type=int,
+        default=12000,
+        help="Max README characters to include in repo context.",
+    )
+    parser.add_argument(
+        "--max-tree-entries",
+        type=int,
+        default=350,
+        help="Max repository tree entries to include in context.",
+    )
+    parser.add_argument(
+        "--max-key-files",
+        type=int,
+        default=12,
+        help="Max representative files to sample for context.",
+    )
+    parser.add_argument(
+        "--max-file-chars",
+        type=int,
+        default=12000,
+        help="Max characters captured per sampled file.",
+    )
     parser.add_argument("--price-in", type=float, default=None, help="Override input $/1M tokens.")
     parser.add_argument(
         "--price-out", type=float, default=None, help="Override output $/1M tokens."
@@ -131,6 +155,10 @@ def main() -> None:
             max_cost=max(0.0, args.max_cost),
             max_tokens=max(0, args.max_tokens),
             pricing=pricing,
+            max_readme_chars=max(0, args.max_readme_chars),
+            max_tree_entries=max(0, args.max_tree_entries),
+            max_key_files=max(0, args.max_key_files),
+            max_file_chars=max(0, args.max_file_chars),
         )
         write_output(render_output(result, args.format), args.output)
     except KeyboardInterrupt:

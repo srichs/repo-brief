@@ -11,11 +11,14 @@ from typing import Any
 
 import requests
 
+from . import __version__
+
 GITHUB_API = "https://api.github.com"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 DEFAULT_TIMEOUT_SECONDS = 25
 MAX_RETRIES = 3
 BACKOFF_BASE_SECONDS = 0.5
+MAX_RETRY_AFTER_SECONDS = 10.0
 
 
 def parse_github_repo_url(repo_url: str) -> tuple[str, str]:
@@ -28,7 +31,11 @@ def parse_github_repo_url(repo_url: str) -> tuple[str, str]:
 
 def gh_headers() -> dict[str, str]:
     """Build GitHub API headers, including auth when available."""
-    headers = {"Accept": "application/vnd.github+json"}
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": f"repo-brief/{__version__}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
     if GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
     return headers
@@ -38,6 +45,24 @@ def _should_retry_status(status_code: int) -> bool:
     return status_code == 429 or 500 <= status_code <= 599
 
 
+def _retry_after_seconds(retry_after: str | None) -> float | None:
+    if retry_after is None:
+        return None
+    try:
+        return max(0.0, min(float(retry_after), MAX_RETRY_AFTER_SECONDS))
+    except ValueError:
+        return None
+
+
+def _rate_limit_error(url: str, response: requests.Response) -> RuntimeError:
+    reset_unix = response.headers.get("X-RateLimit-Reset")
+    reset_hint = f" Reset time (unix): {reset_unix}." if reset_unix else ""
+    return RuntimeError(
+        "GitHub API rate limit exceeded while requesting "
+        f"{url}. Set GITHUB_TOKEN to raise your limits.{reset_hint}"
+    )
+
+
 def safe_get_json(url: str, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> Any:
     """Fetch JSON from a URL with small transient-error retries."""
     last_error: Exception | None = None
@@ -45,8 +70,14 @@ def safe_get_json(url: str, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> Any:
     for attempt in range(MAX_RETRIES + 1):
         try:
             response = requests.get(url, headers=gh_headers(), timeout=timeout)
+            if response.status_code == 403 and response.headers.get("X-RateLimit-Remaining") == "0":
+                raise _rate_limit_error(url, response)
             if _should_retry_status(response.status_code) and attempt < MAX_RETRIES:
-                sleep_for = BACKOFF_BASE_SECONDS * (2**attempt) + random.uniform(0.0, 0.05)
+                retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
+                if response.status_code == 429 and retry_after is not None:
+                    sleep_for = retry_after
+                else:
+                    sleep_for = BACKOFF_BASE_SECONDS * (2**attempt) + random.uniform(0.0, 0.05)
                 time.sleep(sleep_for)
                 continue
             response.raise_for_status()
@@ -54,11 +85,23 @@ def safe_get_json(url: str, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> Any:
         except requests.HTTPError as error:
             status_code = error.response.status_code if error.response is not None else None
             if (
+                status_code == 403
+                and error.response is not None
+                and error.response.headers.get("X-RateLimit-Remaining") == "0"
+            ):
+                raise _rate_limit_error(url, error.response) from error
+            if (
                 status_code is not None
                 and _should_retry_status(status_code)
                 and attempt < MAX_RETRIES
             ):
-                sleep_for = BACKOFF_BASE_SECONDS * (2**attempt) + random.uniform(0.0, 0.05)
+                retry_after = None
+                if error.response is not None and status_code == 429:
+                    retry_after = _retry_after_seconds(error.response.headers.get("Retry-After"))
+                if retry_after is not None:
+                    sleep_for = retry_after
+                else:
+                    sleep_for = BACKOFF_BASE_SECONDS * (2**attempt) + random.uniform(0.0, 0.05)
                 time.sleep(sleep_for)
                 last_error = error
                 continue

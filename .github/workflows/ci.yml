@@ -40,4 +40,5 @@ jobs:
         run: pytest
 
       - name: Build docs
+        if: matrix.python-version == '3.12'
         run: sphinx-build -b html docs docs/_build/html

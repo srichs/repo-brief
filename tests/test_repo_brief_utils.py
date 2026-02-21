@@ -5,7 +5,7 @@ import pytest
 import requests
 
 from repo_brief import agents_workflow as workflow
-from repo_brief import github_client
+from repo_brief import cli, github_client
 from repo_brief.budget import validate_price_overrides
 from repo_brief.github_client import parse_github_repo_url, truncate
 
@@ -99,6 +99,7 @@ def test_safe_get_json_retries_transient_errors(monkeypatch: pytest.MonkeyPatch)
         def __init__(self, status_code: int, payload: dict[str, object]) -> None:
             self.status_code = status_code
             self._payload = payload
+            self.headers: dict[str, str] = {}
 
         def raise_for_status(self) -> None:
             if self.status_code >= 400:
@@ -122,3 +123,100 @@ def test_safe_get_json_retries_transient_errors(monkeypatch: pytest.MonkeyPatch)
 
     assert payload == {"ok": True}
     assert calls["count"] == 3
+
+
+def test_safe_get_json_uses_retry_after_for_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    class Response:
+        def __init__(
+            self, status_code: int, payload: dict[str, object], retry_after: str | None = None
+        ) -> None:
+            self.status_code = status_code
+            self._payload = payload
+            self.headers: dict[str, str] = {}
+            if retry_after is not None:
+                self.headers["Retry-After"] = retry_after
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise requests.HTTPError("too many requests", response=self)
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    def fake_get(url: str, headers: dict[str, str], timeout: int) -> Response:
+        del url, headers, timeout
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return Response(429, {}, retry_after="7")
+        return Response(200, {"ok": True})
+
+    monkeypatch.setattr(github_client.requests, "get", fake_get)
+    monkeypatch.setattr(github_client.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    payload = github_client.safe_get_json("https://api.github.com/repos/openai/openai-python")
+
+    assert payload == {"ok": True}
+    assert calls["count"] == 2
+    assert sleeps == [7.0]
+
+
+def test_safe_get_json_raises_clear_error_on_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Response:
+        status_code = 403
+        headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1700000000"}
+
+        def raise_for_status(self) -> None:
+            raise requests.HTTPError("forbidden", response=self)
+
+        def json(self) -> dict[str, object]:
+            return {}
+
+    monkeypatch.setattr(github_client.requests, "get", lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(RuntimeError) as exc_info:
+        github_client.safe_get_json("https://api.github.com/repos/openai/openai-python")
+
+    message = str(exc_info.value)
+    assert "Set GITHUB_TOKEN" in message
+    assert "1700000000" in message
+
+
+def test_cli_passes_context_limit_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_briefing_loop(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "briefing_markdown": "brief",
+            "reading_plan_markdown": "",
+            "usage": {"estimated_cost_usd": 0.0, "total_tokens": 0, "requests": 1},
+            "stopped_reason": "completed",
+        }
+
+    monkeypatch.setattr(cli, "run_briefing_loop", fake_run_briefing_loop)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "repo-brief",
+            "https://github.com/openai/openai-python",
+            "--max-readme-chars",
+            "111",
+            "--max-tree-entries",
+            "222",
+            "--max-key-files",
+            "9",
+            "--max-file-chars",
+            "333",
+        ],
+    )
+
+    cli.main()
+
+    assert captured["max_readme_chars"] == 111
+    assert captured["max_tree_entries"] == 222
+    assert captured["max_key_files"] == 9
+    assert captured["max_file_chars"] == 333
