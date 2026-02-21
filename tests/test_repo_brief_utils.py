@@ -10,7 +10,7 @@ def test_parse_github_repo_url_accepts_valid_https_url() -> None:
 def test_parse_github_repo_url_rejects_invalid_url() -> None:
     try:
         _parse_github_repo_url("git@github.com:openai/openai-python.git")
-        assert False, "Expected ValueError"
+        raise AssertionError("Expected ValueError")
     except ValueError:
         assert True
 

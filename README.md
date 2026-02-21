@@ -6,6 +6,8 @@
 - a practical reading plan to get productive quickly
 - usage and estimated token-cost metadata
 
+See an example [here](./SUMMARY.md)
+
 ## Features
 
 - Multi-agent workflow (overview → deep dive loop → reading plan)

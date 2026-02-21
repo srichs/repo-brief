@@ -9,12 +9,11 @@ import sys
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import requests
-from dotenv import load_dotenv
-
 from agents import Agent, Runner, function_tool
+from dotenv import load_dotenv
 
 # ----------------------------
 # Env / Config
@@ -42,7 +41,7 @@ ENV_PRICE_CACHED_IN = os.getenv("PRICE_CACHED_IN_PER_1M")
 # ----------------------------
 
 
-def _parse_github_repo_url(repo_url: str) -> Tuple[str, str]:
+def _parse_github_repo_url(repo_url: str) -> tuple[str, str]:
     """Parse a GitHub HTTPS repository URL into ``(owner, repo)``.
 
     Args:
@@ -60,7 +59,7 @@ def _parse_github_repo_url(repo_url: str) -> Tuple[str, str]:
     return m.group(1), m.group(2)
 
 
-def _gh_headers() -> Dict[str, str]:
+def _gh_headers() -> dict[str, str]:
     """Build GitHub API headers, including auth when available."""
     headers = {"Accept": "application/vnd.github+json"}
     if GITHUB_TOKEN:
@@ -82,9 +81,9 @@ def _truncate(s: str, max_chars: int) -> str:
     return s[: max_chars - 20] + "\n...[truncated]..."
 
 
-def _build_tree_index(tree: List[Dict[str, Any]]) -> Dict[str, str]:
+def _build_tree_index(tree: list[dict[str, Any]]) -> dict[str, str]:
     """Convert a Git tree response into a ``path -> type`` mapping."""
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for item in tree:
         p = item.get("path")
         t = item.get("type")
@@ -93,7 +92,7 @@ def _build_tree_index(tree: List[Dict[str, Any]]) -> Dict[str, str]:
     return out
 
 
-def _tree_summary(paths: List[str], max_entries: int = 300) -> str:
+def _tree_summary(paths: list[str], max_entries: int = 300) -> str:
     """Render a sorted tree summary with file/folder icons."""
     paths = sorted(paths, key=lambda p: (p.count("/"), p))
     paths = paths[:max_entries]
@@ -104,7 +103,7 @@ def _tree_summary(paths: List[str], max_entries: int = 300) -> str:
     return "\n".join(lines)
 
 
-def _pick_key_files(tree_index: Dict[str, str], max_files: int) -> List[str]:
+def _pick_key_files(tree_index: dict[str, str], max_files: int) -> list[str]:
     """Pick representative files to bootstrap repository understanding."""
     candidates = [
         "README.md",
@@ -136,7 +135,7 @@ def _pick_key_files(tree_index: Dict[str, str], max_files: int) -> List[str]:
         "build.gradle",
     ]
 
-    found: List[str] = []
+    found: list[str] = []
     present = set(tree_index.keys())
 
     for c in candidates:
@@ -175,7 +174,7 @@ def _pick_key_files(tree_index: Dict[str, str], max_files: int) -> List[str]:
     return uniq[:max_files]
 
 
-def _fetch_repo_tree(owner: str, repo: str, branch: str) -> List[Dict[str, Any]]:
+def _fetch_repo_tree(owner: str, repo: str, branch: str) -> list[dict[str, Any]]:
     """Fetch a repository tree recursively for a specific branch."""
     branch_obj = _safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/branches/{branch}")
     sha = branch_obj["commit"]["sha"]
@@ -203,7 +202,7 @@ def get_final_text(run_result: Any) -> str:
             if isinstance(val, str) and val.strip():
                 return val
     if hasattr(run_result, "messages"):
-        msgs = getattr(run_result, "messages") or []
+        msgs = run_result.messages or []
         for m in reversed(msgs):
             if isinstance(m, dict):
                 content = m.get("content")
@@ -237,7 +236,7 @@ def _fetch_repo_context_impl(
     max_tree_entries: int = 350,
     max_key_files: int = 12,
     max_file_chars: int = 12000,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Collect high-signal repository context for prompting downstream agents."""
     owner, repo = _parse_github_repo_url(repo_url)
     repo_meta = _safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}")
@@ -246,7 +245,7 @@ def _fetch_repo_context_impl(
     tree = _fetch_repo_tree(owner, repo, default_branch)
     tree_index = _build_tree_index(tree)
 
-    paths_for_summary: List[str] = []
+    paths_for_summary: list[str] = []
     for p, t in tree_index.items():
         lower = p.lower()
         if lower.startswith(("node_modules/", "dist/", "build/", ".git/", ".venv/", "venv/")):
@@ -258,7 +257,7 @@ def _fetch_repo_context_impl(
 
     key_files = _pick_key_files(tree_index, max_files=max_key_files)
 
-    files_content: Dict[str, str] = {}
+    files_content: dict[str, str] = {}
     for f in key_files:
         try:
             files_content[f] = _fetch_file_content(owner, repo, f, default_branch, max_file_chars)
@@ -303,7 +302,7 @@ def fetch_repo_context(
     max_tree_entries: int = 350,
     max_key_files: int = 12,
     max_file_chars: int = 12000,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Agents tool wrapper for repository metadata and content sampling."""
     return _fetch_repo_context_impl(
         repo_url=repo_url,
@@ -316,15 +315,15 @@ def fetch_repo_context(
 
 def _fetch_files_impl(
     repo_url: str,
-    paths: List[str],
+    paths: list[str],
     max_file_chars: int = 16000,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Fetch selected files from a repository default branch."""
     owner, repo = _parse_github_repo_url(repo_url)
     repo_meta = _safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}")
     default_branch = repo_meta.get("default_branch", "main")
 
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for p in paths:
         p = p.strip().lstrip("/")
         if not p:
@@ -338,7 +337,7 @@ def _fetch_files_impl(
 
 
 @function_tool
-def fetch_files(repo_url: str, paths: List[str], max_file_chars: int = 16000) -> Dict[str, Any]:
+def fetch_files(repo_url: str, paths: list[str], max_file_chars: int = 16000) -> dict[str, Any]:
     """Agents tool wrapper for fetching specific repository files."""
     return _fetch_files_impl(repo_url=repo_url, paths=paths, max_file_chars=max_file_chars)
 
@@ -359,9 +358,9 @@ class Pricing:
     @staticmethod
     def for_model(
         model: str,
-        price_in: Optional[float],
-        price_out: Optional[float],
-        price_cached_in: Optional[float],
+        price_in: float | None,
+        price_out: float | None,
+        price_cached_in: float | None,
     ) -> "Pricing":
         """Resolve pricing from CLI overrides, environment, or defaults."""
         if price_in is not None and price_out is not None:
@@ -390,7 +389,7 @@ class Pricing:
         )
 
 
-def usage_totals(result: Any) -> Dict[str, int]:
+def usage_totals(result: Any) -> dict[str, int]:
     """Aggregate token usage totals from an Agents SDK result object."""
     entries = result.context_wrapper.usage.request_usage_entries
     in_tokens = sum(getattr(e, "input_tokens", 0) for e in entries)
@@ -460,8 +459,8 @@ DeepDiveAgent = Agent(
         - the current briefing (markdown)
         - a list of file paths to fetch
 
-        Use the tool to fetch those files, then improve the briefing with sharper, more accurate details.
-        Be explicit about what is supported by the files vs inferred.
+        Use the tool to fetch those files, then improve the briefing with sharper, more 
+        accurate details. Be explicit about what is supported by the files vs inferred.
 
         OUTPUT MUST BE VALID JSON with this schema:
         {
@@ -511,7 +510,7 @@ ReadingPlanAgent = Agent(
 )
 
 
-def _json_or_fallback(text: str, fallback_key: str = "briefing_markdown") -> Dict[str, Any]:
+def _json_or_fallback(text: str, fallback_key: str = "briefing_markdown") -> dict[str, Any]:
     """Parse model JSON output, or wrap raw text in a fallback dictionary."""
     try:
         obj = json.loads(text)
@@ -535,7 +534,7 @@ def run_briefing_loop(
     max_cost: float,
     max_tokens: int,
     pricing: Pricing,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run overview, deep-dive, and reading-plan stages with budget guards."""
     accumulated_tokens = 0
     accumulated_cost = 0.0
@@ -559,9 +558,7 @@ def run_briefing_loop(
     def budget_exceeded() -> bool:
         if max_tokens > 0 and accumulated_tokens >= max_tokens:
             return True
-        if max_cost > 0 and accumulated_cost >= max_cost:
-            return True
-        return False
+        return bool(max_cost > 0 and accumulated_cost >= max_cost)
 
     it = 0
     while it < max_iters and files_to_inspect and not budget_exceeded():
@@ -637,7 +634,7 @@ def run_briefing_loop(
     }
 
 
-def _render_output(result: Dict[str, Any], output_format: str) -> str:
+def _render_output(result: dict[str, Any], output_format: str) -> str:
     """Render orchestrated results as JSON or markdown output."""
     if output_format == "json":
         return json.dumps(result, indent=2, ensure_ascii=False)
@@ -658,7 +655,7 @@ def _render_output(result: Dict[str, Any], output_format: str) -> str:
     return "\n\n".join(parts)
 
 
-def _write_output(output_text: str, output_path: Optional[str]) -> None:
+def _write_output(output_text: str, output_path: str | None) -> None:
     """Write rendered output to stdout or a file path."""
     if not output_path:
         print(output_text)
@@ -672,7 +669,8 @@ def build_parser() -> argparse.ArgumentParser:
     """Build and return the command-line parser for ``repo-brief``."""
     parser = argparse.ArgumentParser(
         prog="repo-brief",
-        description="Multi-agent GitHub repo briefing: URL -> 80% understanding (overview + deep-dive + reading plan).",
+        description="""Multi-agent GitHub repo briefing: URL -> 80% understanding (overview + 
+        deep-dive + reading plan).""",
     )
     parser.add_argument("repo_url", help="e.g. https://github.com/OWNER/REPO")
     parser.add_argument(
