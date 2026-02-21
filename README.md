@@ -6,7 +6,7 @@
 - a practical reading plan to get productive quickly
 - usage and estimated token-cost metadata
 
-See an example [here](./SUMMARY.md)
+See an example output [here](./SUMMARY.md).
 
 ## Features
 
