@@ -1,3 +1,4 @@
+import json
 import sys
 import types
 
@@ -34,6 +35,7 @@ _install_test_stubs()
 from repo_brief.repo_brief import (  # noqa: E402
     _json_or_fallback,
     _parse_github_repo_url,
+    _tree_summary,
     _truncate,
     _validate_price_overrides,
 )
@@ -75,3 +77,65 @@ def test_validate_price_overrides_requires_both_values() -> None:
         raise AssertionError("Expected ValueError")
     except ValueError:
         assert True
+
+
+def test_tree_summary_uses_folder_icon_for_directories() -> None:
+    out = _tree_summary(["src/", "docs/"])
+    assert "📁 src/" in out
+    assert "📁 docs/" in out
+
+
+def test_tree_summary_uses_file_icon_for_files() -> None:
+    out = _tree_summary(["README.md", "src/main.py"])
+    assert "📄 README.md" in out
+    assert "📄 src/main.py" in out
+
+
+def test_tree_summary_respects_max_entries() -> None:
+    out = _tree_summary(["a.py", "b.py", "c.py"], max_entries=2)
+    assert out.splitlines() == ["📄 a.py", "📄 b.py"]
+
+
+def test_tree_summary_orders_paths_stably() -> None:
+    out = _tree_summary(["b.py", "src/main.py", "a.py", "src/", "docs/"])
+    assert out.splitlines() == ["📄 a.py", "📄 b.py", "📁 docs/", "📁 src/", "📄 src/main.py"]
+
+
+def test_run_briefing_loop_fetches_repo_context_once(monkeypatch) -> None:
+    import repo_brief.repo_brief as rb
+
+    calls = {"count": 0}
+
+    def fake_repo_context(repo_url: str, **kwargs):
+        calls["count"] += 1
+        return {
+            "tree_summary": "📄 README.md",
+            "key_files": ["README.md"],
+        }
+
+    class _DummyResult:
+        def __init__(self, payload: dict[str, str]) -> None:
+            self.final_output = json.dumps(payload)
+
+    def fake_run_sync(agent, prompt: str, max_turns: int):
+        if agent is rb.OverviewAgent:
+            return _DummyResult({"briefing_markdown": "brief", "files_to_inspect": []})
+        return _DummyResult({"reading_plan_markdown": "plan"})
+
+    monkeypatch.setattr(rb, "_fetch_repo_context_impl", fake_repo_context)
+    monkeypatch.setattr(rb.Runner, "run_sync", fake_run_sync)
+    monkeypatch.setattr(rb, "usage_totals", lambda _result: {"total_tokens": 0, "requests": 1})
+    monkeypatch.setattr(rb, "estimate_cost_usd", lambda _result, _pricing: 0.0)
+
+    pricing = rb.Pricing(in_per_1m=0.0, out_per_1m=0.0, cached_in_per_1m=0.0)
+    rb.run_briefing_loop(
+        repo_url="https://github.com/openai/openai-python",
+        model="gpt-4.1-mini",
+        max_iters=2,
+        max_turns=1,
+        max_cost=0.0,
+        max_tokens=0,
+        pricing=pricing,
+    )
+
+    assert calls["count"] == 1

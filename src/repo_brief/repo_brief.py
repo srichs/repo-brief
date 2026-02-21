@@ -429,7 +429,8 @@ OverviewAgent = Agent(
         """
         You are a staff engineer. Goal: produce an "80% understanding" overview of a GitHub repo.
 
-        Use the tool to fetch repo context: metadata, README, tree summary, and key file contents.
+        You will be given repo_context JSON that includes metadata, README, tree summary,
+        key files, and key file contents.
 
         OUTPUT MUST BE VALID JSON with this schema:
         {
@@ -453,7 +454,7 @@ OverviewAgent = Agent(
         If unsure, pick entrypoints + config files.
         """
     ).strip(),
-    tools=[fetch_repo_context],
+    tools=[],
 )
 
 DeepDiveAgent = Agent(
@@ -542,11 +543,20 @@ def run_briefing_loop(
     pricing: Pricing,
 ) -> dict[str, Any]:
     """Run overview, deep-dive, and reading-plan stages with budget guards."""
+    repo_context = _fetch_repo_context_impl(repo_url)
+
     accumulated_tokens = 0
     accumulated_cost = 0.0
     total_requests = 0
 
-    overview_prompt = f"Analyze this repo and produce the JSON output: {repo_url}"
+    overview_prompt = json.dumps(
+        {
+            "repo_url": repo_url,
+            "repo_context": repo_context,
+            "instruction": "Analyze this repo context and produce the required JSON output.",
+        },
+        ensure_ascii=False,
+    )
     overview_result = Runner.run_sync(OverviewAgent, overview_prompt, max_turns=max_turns)
     overview_usage = usage_totals(overview_result)
     overview_cost = estimate_cost_usd(overview_result, pricing)
@@ -558,8 +568,6 @@ def run_briefing_loop(
     data = _json_or_fallback(get_final_text(overview_result))
     briefing = data.get("briefing_markdown", "")
     files_to_inspect = data.get("files_to_inspect", []) or []
-
-    repo_context = _fetch_repo_context_impl(repo_url)
 
     def budget_exceeded() -> bool:
         if max_tokens > 0 and accumulated_tokens >= max_tokens:
