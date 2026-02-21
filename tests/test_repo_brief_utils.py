@@ -6,7 +6,7 @@ import requests
 
 from repo_brief import agents_workflow as workflow
 from repo_brief import cli, github_client
-from repo_brief.budget import validate_price_overrides
+from repo_brief.budget import Pricing, validate_price_overrides
 from repo_brief.github_client import parse_github_repo_url, truncate
 
 
@@ -66,8 +66,13 @@ def test_run_briefing_loop_fetches_repo_context_once(monkeypatch: pytest.MonkeyP
             "key_files": ["README.md"],
         }
 
-    def fake_run_sync(agent: object, prompt: str, max_turns: int) -> _DummyResult:
-        del prompt, max_turns
+    def fake_run_sync(
+        agent: object,
+        prompt: str,
+        max_turns: int,
+        run_config: object,
+    ) -> _DummyResult:
+        del prompt, max_turns, run_config
         if agent is workflow.OverviewAgent:
             return _DummyResult({"briefing_markdown": "brief", "files_to_inspect": []})
         return _DummyResult({"reading_plan_markdown": "plan"})
@@ -90,6 +95,74 @@ def test_run_briefing_loop_fetches_repo_context_once(monkeypatch: pytest.MonkeyP
     )
 
     assert calls["count"] == 1
+
+
+def test_gh_headers_reads_github_token_at_call_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    assert "Authorization" not in github_client.gh_headers()
+
+    monkeypatch.setenv("GITHUB_TOKEN", "new-token")
+    headers = github_client.gh_headers()
+
+    assert headers["Authorization"] == "Bearer new-token"
+
+
+def test_pricing_for_model_reads_env_prices_at_call_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PRICE_IN_PER_1M", "9.5")
+    monkeypatch.setenv("PRICE_OUT_PER_1M", "10.5")
+    monkeypatch.setenv("PRICE_CACHED_IN_PER_1M", "1.5")
+
+    pricing = Pricing.for_model(
+        model="gpt-4.1-mini",
+        price_in=None,
+        price_out=None,
+        price_cached_in=None,
+    )
+
+    assert pricing.in_per_1m == 9.5
+    assert pricing.out_per_1m == 10.5
+    assert pricing.cached_in_per_1m == 1.5
+
+
+def test_run_briefing_loop_passes_model_via_run_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_config_models: list[str | None] = []
+
+    def fake_repo_context(repo_url: str, **_kwargs: object) -> dict[str, object]:
+        del repo_url
+        return {"tree_summary": "📄 README.md", "key_files": ["README.md"]}
+
+    def fake_run_sync(
+        agent: object,
+        prompt: str,
+        max_turns: int,
+        run_config: object,
+    ) -> _DummyResult:
+        del prompt, max_turns
+        run_config_models.append(getattr(run_config, "model", None))
+        if agent is workflow.OverviewAgent:
+            return _DummyResult({"briefing_markdown": "brief", "files_to_inspect": []})
+        return _DummyResult({"reading_plan_markdown": "plan"})
+
+    monkeypatch.setattr(workflow, "fetch_repo_context_impl", fake_repo_context)
+    monkeypatch.setattr(workflow.Runner, "run_sync", fake_run_sync)
+    monkeypatch.setattr(
+        workflow, "usage_totals", lambda _result: {"total_tokens": 0, "requests": 1}
+    )
+    monkeypatch.setattr(workflow, "estimate_cost_usd", lambda _result, _pricing: 0.0)
+
+    workflow.run_briefing_loop(
+        repo_url="https://github.com/openai/openai-python",
+        model="gpt-4.1",
+        max_iters=1,
+        max_turns=1,
+        max_cost=0.0,
+        max_tokens=0,
+        pricing=SimpleNamespace(in_per_1m=0.0, out_per_1m=0.0, cached_in_per_1m=0.0),
+    )
+
+    assert run_config_models == ["gpt-4.1", "gpt-4.1"]
 
 
 def test_safe_get_json_retries_transient_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -196,7 +269,7 @@ def test_cli_passes_context_limit_flags(monkeypatch: pytest.MonkeyPatch) -> None
             "stopped_reason": "completed",
         }
 
-    monkeypatch.setattr(cli, "run_briefing_loop", fake_run_briefing_loop)
+    monkeypatch.setattr(workflow, "run_briefing_loop", fake_run_briefing_loop)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(
         "sys.argv",

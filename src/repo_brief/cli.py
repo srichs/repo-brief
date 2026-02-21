@@ -11,10 +11,6 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from .agents_workflow import run_briefing_loop
-from .budget import Pricing, validate_price_overrides
-from .github_client import parse_github_repo_url
-
 load_dotenv()
 
 
@@ -123,6 +119,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     """CLI entrypoint with validation, orchestration, and error handling."""
+    from .agents_workflow import run_briefing_loop
+    from .budget import Pricing, validate_price_overrides
+    from .github_client import parse_github_repo_url
+
     parser = build_parser()
     args = parser.parse_args()
 

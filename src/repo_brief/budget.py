@@ -12,10 +12,6 @@ DEFAULT_PRICING_PER_1M = {
     "_default": {"in": 1.00, "out": 4.00, "cached_in": 0.25},
 }
 
-ENV_PRICE_IN = os.getenv("PRICE_IN_PER_1M")
-ENV_PRICE_OUT = os.getenv("PRICE_OUT_PER_1M")
-ENV_PRICE_CACHED_IN = os.getenv("PRICE_CACHED_IN_PER_1M")
-
 
 @dataclass
 class Pricing:
@@ -44,13 +40,16 @@ class Pricing:
                 ),
             )
 
-        if ENV_PRICE_IN and ENV_PRICE_OUT:
+        env_price_in = os.getenv("PRICE_IN_PER_1M")
+        env_price_out = os.getenv("PRICE_OUT_PER_1M")
+        env_price_cached_in = os.getenv("PRICE_CACHED_IN_PER_1M")
+        if env_price_in and env_price_out:
             return Pricing(
-                in_per_1m=float(ENV_PRICE_IN),
-                out_per_1m=float(ENV_PRICE_OUT),
+                in_per_1m=float(env_price_in),
+                out_per_1m=float(env_price_out),
                 cached_in_per_1m=(
-                    float(ENV_PRICE_CACHED_IN)
-                    if ENV_PRICE_CACHED_IN
+                    float(env_price_cached_in)
+                    if env_price_cached_in
                     else DEFAULT_PRICING_PER_1M["_default"]["cached_in"]
                 ),
             )
