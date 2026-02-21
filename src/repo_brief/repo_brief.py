@@ -1,3 +1,5 @@
+"""CLI entrypoint and orchestration for generating GitHub repository briefings."""
+
 import argparse
 import base64
 import json
@@ -41,6 +43,17 @@ ENV_PRICE_CACHED_IN = os.getenv("PRICE_CACHED_IN_PER_1M")
 
 
 def _parse_github_repo_url(repo_url: str) -> Tuple[str, str]:
+    """Parse a GitHub HTTPS repository URL into ``(owner, repo)``.
+
+    Args:
+        repo_url: URL in the form ``https://github.com/OWNER/REPO``.
+
+    Returns:
+        A tuple of repository owner and repository name.
+
+    Raises:
+        ValueError: If ``repo_url`` is not a supported GitHub HTTPS URL.
+    """
     m = re.match(r"^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", repo_url.strip())
     if not m:
         raise ValueError("Expected https://github.com/OWNER/REPO")
@@ -48,6 +61,7 @@ def _parse_github_repo_url(repo_url: str) -> Tuple[str, str]:
 
 
 def _gh_headers() -> Dict[str, str]:
+    """Build GitHub API headers, including auth when available."""
     headers = {"Accept": "application/vnd.github+json"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
@@ -55,18 +69,21 @@ def _gh_headers() -> Dict[str, str]:
 
 
 def _safe_get_json(url: str, timeout: int = 25) -> Any:
+    """Fetch JSON from a URL and raise for HTTP errors."""
     r = requests.get(url, headers=_gh_headers(), timeout=timeout)
     r.raise_for_status()
     return r.json()
 
 
 def _truncate(s: str, max_chars: int) -> str:
+    """Truncate a string to ``max_chars`` with a visible suffix."""
     if len(s) <= max_chars:
         return s
     return s[: max_chars - 20] + "\n...[truncated]..."
 
 
 def _build_tree_index(tree: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Convert a Git tree response into a ``path -> type`` mapping."""
     out: Dict[str, str] = {}
     for item in tree:
         p = item.get("path")
@@ -77,6 +94,7 @@ def _build_tree_index(tree: List[Dict[str, Any]]) -> Dict[str, str]:
 
 
 def _tree_summary(paths: List[str], max_entries: int = 300) -> str:
+    """Render a sorted tree summary with file/folder icons."""
     paths = sorted(paths, key=lambda p: (p.count("/"), p))
     paths = paths[:max_entries]
     lines = []
@@ -87,6 +105,7 @@ def _tree_summary(paths: List[str], max_entries: int = 300) -> str:
 
 
 def _pick_key_files(tree_index: Dict[str, str], max_files: int) -> List[str]:
+    """Pick representative files to bootstrap repository understanding."""
     candidates = [
         "README.md",
         "README.rst",
@@ -157,6 +176,7 @@ def _pick_key_files(tree_index: Dict[str, str], max_files: int) -> List[str]:
 
 
 def _fetch_repo_tree(owner: str, repo: str, branch: str) -> List[Dict[str, Any]]:
+    """Fetch a repository tree recursively for a specific branch."""
     branch_obj = _safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/branches/{branch}")
     sha = branch_obj["commit"]["sha"]
     tree_obj = _safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{sha}?recursive=1")
@@ -164,6 +184,7 @@ def _fetch_repo_tree(owner: str, repo: str, branch: str) -> List[Dict[str, Any]]
 
 
 def _fetch_file_content(owner: str, repo: str, path: str, ref: str, max_chars: int) -> str:
+    """Fetch and decode file content from GitHub repository contents API."""
     url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}?ref={ref}"
     obj = _safe_get_json(url)
     if isinstance(obj, dict) and obj.get("type") == "file":
@@ -174,10 +195,8 @@ def _fetch_file_content(owner: str, repo: str, path: str, ref: str, max_chars: i
     return ""
 
 
-def get_final_text(run_result) -> str:
-    """
-    Agents SDK RunResult changed across versions. Try common attribute names.
-    """
+def get_final_text(run_result: Any) -> str:
+    """Extract final text output from different Agents SDK result shapes."""
     for attr in ("final_output", "output", "output_text", "final_output_text", "text"):
         if hasattr(run_result, attr):
             val = getattr(run_result, attr)
@@ -219,6 +238,7 @@ def _fetch_repo_context_impl(
     max_key_files: int = 12,
     max_file_chars: int = 12000,
 ) -> Dict[str, Any]:
+    """Collect high-signal repository context for prompting downstream agents."""
     owner, repo = _parse_github_repo_url(repo_url)
     repo_meta = _safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}")
     default_branch = repo_meta.get("default_branch", "main")
@@ -284,7 +304,7 @@ def fetch_repo_context(
     max_key_files: int = 12,
     max_file_chars: int = 12000,
 ) -> Dict[str, Any]:
-    """Tool wrapper: fetch repo metadata + README + tree + key files."""
+    """Agents tool wrapper for repository metadata and content sampling."""
     return _fetch_repo_context_impl(
         repo_url=repo_url,
         max_readme_chars=max_readme_chars,
@@ -299,6 +319,7 @@ def _fetch_files_impl(
     paths: List[str],
     max_file_chars: int = 16000,
 ) -> Dict[str, Any]:
+    """Fetch selected files from a repository default branch."""
     owner, repo = _parse_github_repo_url(repo_url)
     repo_meta = _safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}")
     default_branch = repo_meta.get("default_branch", "main")
@@ -318,7 +339,7 @@ def _fetch_files_impl(
 
 @function_tool
 def fetch_files(repo_url: str, paths: List[str], max_file_chars: int = 16000) -> Dict[str, Any]:
-    """Tool wrapper: fetch specific file contents."""
+    """Agents tool wrapper for fetching specific repository files."""
     return _fetch_files_impl(repo_url=repo_url, paths=paths, max_file_chars=max_file_chars)
 
 
@@ -329,6 +350,8 @@ def fetch_files(repo_url: str, paths: List[str], max_file_chars: int = 16000) ->
 
 @dataclass
 class Pricing:
+    """Model pricing information used to estimate prompt/completion costs."""
+
     in_per_1m: float
     out_per_1m: float
     cached_in_per_1m: float
@@ -340,6 +363,7 @@ class Pricing:
         price_out: Optional[float],
         price_cached_in: Optional[float],
     ) -> "Pricing":
+        """Resolve pricing from CLI overrides, environment, or defaults."""
         if price_in is not None and price_out is not None:
             return Pricing(
                 in_per_1m=price_in,
@@ -362,7 +386,8 @@ class Pricing:
         return Pricing(in_per_1m=entry["in"], out_per_1m=entry["out"], cached_in_per_1m=entry.get("cached_in", 0.0))
 
 
-def usage_totals(result) -> Dict[str, int]:
+def usage_totals(result: Any) -> Dict[str, int]:
+    """Aggregate token usage totals from an Agents SDK result object."""
     entries = result.context_wrapper.usage.request_usage_entries
     in_tokens = sum(getattr(e, "input_tokens", 0) for e in entries)
     out_tokens = sum(getattr(e, "output_tokens", 0) for e in entries)
@@ -376,7 +401,8 @@ def usage_totals(result) -> Dict[str, int]:
     }
 
 
-def estimate_cost_usd(result, pricing: Pricing) -> float:
+def estimate_cost_usd(result: Any, pricing: Pricing) -> float:
+    """Estimate USD cost for a run result using configured pricing."""
     totals = usage_totals(result)
     in_cost = (totals["input_tokens"] / 1_000_000.0) * pricing.in_per_1m
     out_cost = (totals["output_tokens"] / 1_000_000.0) * pricing.out_per_1m
@@ -482,6 +508,7 @@ ReadingPlanAgent = Agent(
 
 
 def _json_or_fallback(text: str, fallback_key: str = "briefing_markdown") -> Dict[str, Any]:
+    """Parse model JSON output, or wrap raw text in a fallback dictionary."""
     try:
         obj = json.loads(text)
         if isinstance(obj, dict):
@@ -505,12 +532,13 @@ def run_briefing_loop(
     max_tokens: int,
     pricing: Pricing,
 ) -> Dict[str, Any]:
+    """Run overview, deep-dive, and reading-plan stages with budget guards."""
     accumulated_tokens = 0
     accumulated_cost = 0.0
     total_requests = 0
 
     overview_prompt = f"Analyze this repo and produce the JSON output: {repo_url}"
-    overview_result = Runner.run_sync(OverviewAgent, overview_prompt, max_turns=max_turns )
+    overview_result = Runner.run_sync(OverviewAgent, overview_prompt, max_turns=max_turns)
     overview_usage = usage_totals(overview_result)
     overview_cost = estimate_cost_usd(overview_result, pricing)
 
@@ -545,7 +573,7 @@ def run_briefing_loop(
             ensure_ascii=False,
         )
 
-        deep_result = Runner.run_sync(DeepDiveAgent, deep_prompt, max_turns=max_turns )
+        deep_result = Runner.run_sync(DeepDiveAgent, deep_prompt, max_turns=max_turns)
         deep_usage = usage_totals(deep_result)
         deep_cost = estimate_cost_usd(deep_result, pricing)
 
@@ -569,7 +597,7 @@ def run_briefing_loop(
             },
             ensure_ascii=False,
         )
-        rp_result = Runner.run_sync(ReadingPlanAgent, rp_prompt, max_turns=max_turns )
+        rp_result = Runner.run_sync(ReadingPlanAgent, rp_prompt, max_turns=max_turns)
         rp_usage = usage_totals(rp_result)
         rp_cost = estimate_cost_usd(rp_result, pricing)
 
@@ -605,6 +633,7 @@ def run_briefing_loop(
 
 
 def _render_output(result: Dict[str, Any], output_format: str) -> str:
+    """Render orchestrated results as JSON or markdown output."""
     if output_format == "json":
         return json.dumps(result, indent=2, ensure_ascii=False)
 
@@ -625,6 +654,7 @@ def _render_output(result: Dict[str, Any], output_format: str) -> str:
 
 
 def _write_output(output_text: str, output_path: Optional[str]) -> None:
+    """Write rendered output to stdout or a file path."""
     if not output_path:
         print(output_text)
         return
@@ -634,6 +664,7 @@ def _write_output(output_text: str, output_path: Optional[str]) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build and return the command-line parser for ``repo-brief``."""
     parser = argparse.ArgumentParser(
         prog="repo-brief",
         description="Multi-agent GitHub repo briefing: URL -> 80% understanding (overview + deep-dive + reading plan).",
@@ -653,6 +684,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """CLI entrypoint with validation, orchestration, and error handling."""
     parser = build_parser()
     args = parser.parse_args()
 
