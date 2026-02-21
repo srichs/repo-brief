@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = [
+  "setuptools>=68",
+  "wheel",
+]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,11 +11,20 @@ version = "0.1.0"
 description = "Agentic CLI for generating GitHub repository briefings and reading plans"
 readme = "README.md"
 requires-python = ">=3.10"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
 dependencies = [
   "openai-agents",
   "requests>=2.31.0",
   "python-dotenv>=1.0.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/srichs/repo-brief"
 
 [project.optional-dependencies]
 dev = [
@@ -29,7 +41,7 @@ dev = [
 repo-brief = "repo_brief.repo_brief:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
