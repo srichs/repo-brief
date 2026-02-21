@@ -76,9 +76,15 @@ def _safe_get_json(url: str, timeout: int = 25) -> Any:
 
 def _truncate(s: str, max_chars: int) -> str:
     """Truncate a string to ``max_chars`` with a visible suffix."""
+    if max_chars <= 0:
+        return ""
+
+    suffix = "\n...[truncated]..."
     if len(s) <= max_chars:
         return s
-    return s[: max_chars - 20] + "\n...[truncated]..."
+    if max_chars <= len(suffix):
+        return suffix[:max_chars]
+    return s[: max_chars - len(suffix)] + suffix
 
 
 def _build_tree_index(tree: list[dict[str, Any]]) -> dict[str, str]:
@@ -703,6 +709,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_price_overrides(price_in: float | None, price_out: float | None) -> None:
+    """Ensure token price overrides are provided as a pair."""
+    if (price_in is None) != (price_out is None):
+        raise ValueError("--price-in and --price-out must be provided together")
+
+
 def main() -> None:
     """CLI entrypoint with validation, orchestration, and error handling."""
     parser = build_parser()
@@ -718,6 +730,12 @@ def main() -> None:
         print(
             "ERROR: OPENAI_API_KEY not found. Put it in .env or your environment.", file=sys.stderr
         )
+        sys.exit(2)
+
+    try:
+        _validate_price_overrides(args.price_in, args.price_out)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
 
     pricing = Pricing.for_model(args.model, args.price_in, args.price_out, args.price_cached_in)
