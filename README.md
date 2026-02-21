@@ -74,6 +74,20 @@ Run tests:
 pytest
 ```
 
+Run quality checks:
+
+```bash
+ruff format --check .
+ruff check .
+mypy
+```
+
+Build docs:
+
+```bash
+sphinx-build -b html docs docs/_build/html
+```
+
 ## Notes
 
 - Only public repositories are supported by default.
