@@ -11,6 +11,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from . import __version__
+
 
 def render_output(result: dict[str, Any], output_format: str) -> str:
     """Render orchestrated results as JSON or markdown output."""
@@ -54,7 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
             "(overview + deep-dive + reading plan)."
         ),
     )
-    parser.add_argument("repo_url", help="e.g. https://github.com/OWNER/REPO")
+    parser.add_argument("repo_url", nargs="?", help="e.g. https://github.com/OWNER/REPO")
+    parser.add_argument("-V", "--version", action="version", version=f"repo-brief {__version__}")
     parser.add_argument(
         "--model",
         default="gpt-4.1-mini",
@@ -127,16 +130,26 @@ def main() -> None:
     args = parser.parse_args()
     load_dotenv()
 
+    if not args.repo_url:
+        parser.error("the following arguments are required: repo_url")
+
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        print(
+            "ERROR: OPENAI_API_KEY is required. Set it in your environment or .env file.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     try:
         parse_github_repo_url(args.repo_url)
     except ValueError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(2)
-
-    if not os.getenv("OPENAI_API_KEY"):
         print(
-            "ERROR: OPENAI_API_KEY not found. Put it in .env or your environment.", file=sys.stderr
+            f"ERROR: Invalid repository URL '{args.repo_url}'. Expected format: "
+            "https://github.com/OWNER/REPO",
+            file=sys.stderr,
         )
+        print(f"DETAILS: {exc}", file=sys.stderr)
         sys.exit(2)
 
     try:
