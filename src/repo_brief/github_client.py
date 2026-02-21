@@ -241,10 +241,22 @@ def pick_key_files(tree_index: dict[str, str], max_files: int) -> list[str]:
 
 
 def fetch_repo_tree(owner: str, repo: str, branch: str) -> list[dict[str, Any]]:
-    """Fetch a repository tree recursively for a specific branch."""
-    branch_obj = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/branches/{branch}")
-    sha = branch_obj["commit"]["sha"]
-    tree_obj = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{sha}?recursive=1")
+    """Fetch a repository tree recursively for a specific branch or ref."""
+    tree_sha = ""
+    try:
+        branch_obj = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/branches/{branch}")
+        tree_sha = str(
+            (((branch_obj.get("commit") or {}).get("commit") or {}).get("tree") or {}).get("sha")
+            or ""
+        )
+    except RuntimeError:
+        commit_obj = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/commits/{branch}")
+        tree_sha = ((commit_obj.get("commit") or {}).get("tree") or {}).get("sha", "")
+
+    if not tree_sha:
+        raise RuntimeError(f"Could not resolve repository tree SHA for {owner}/{repo}@{branch}")
+
+    tree_obj = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{tree_sha}?recursive=1")
     tree = tree_obj.get("tree", []) if isinstance(tree_obj, dict) else []
     return tree if isinstance(tree, list) else []
 
@@ -267,13 +279,17 @@ def fetch_repo_context_impl(
     max_tree_entries: int = 350,
     max_key_files: int = 12,
     max_file_chars: int = 12000,
+    ref: str = "",
 ) -> dict[str, Any]:
     """Collect high-signal repository context for prompting downstream agents."""
     owner, repo = parse_github_repo_url(repo_url)
-    repo_meta = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}")
-    default_branch = repo_meta.get("default_branch", "main")
+    repo_meta: dict[str, Any] = {}
+    resolved_ref = ref
+    if not resolved_ref:
+        repo_meta = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}")
+        resolved_ref = repo_meta.get("default_branch", "main")
 
-    tree = fetch_repo_tree(owner, repo, default_branch)
+    tree = fetch_repo_tree(owner, repo, resolved_ref)
     tree_index = build_tree_index(tree)
 
     paths_for_summary: list[str] = []
@@ -295,7 +311,7 @@ def fetch_repo_context_impl(
                 owner,
                 repo,
                 file_path,
-                default_branch,
+                resolved_ref,
                 max_file_chars,
             )
         except Exception:
@@ -304,7 +320,9 @@ def fetch_repo_context_impl(
     readme_text = files_content.get("README.md", "")
     if not readme_text:
         try:
-            readme_obj = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/readme")
+            readme_obj = safe_get_json(
+                f"{GITHUB_API}/repos/{owner}/{repo}/readme?ref={resolved_ref}"
+            )
             content_b64 = readme_obj.get("content", "")
             if content_b64:
                 readme_text = base64.b64decode(content_b64).decode("utf-8", errors="replace")
@@ -318,13 +336,14 @@ def fetch_repo_context_impl(
         "repo_url": repo_url,
         "owner": owner,
         "repo": repo,
-        "full_name": repo_meta.get("full_name"),
+        "full_name": repo_meta.get("full_name") or f"{owner}/{repo}",
         "description": repo_meta.get("description"),
         "stars": repo_meta.get("stargazers_count"),
         "language": repo_meta.get("language"),
         "topics": repo_meta.get("topics", []),
         "license": (repo_meta.get("license") or {}).get("spdx_id"),
-        "default_branch": default_branch,
+        "default_branch": repo_meta.get("default_branch"),
+        "ref": resolved_ref,
         "tree_summary": tree_summary(paths_for_summary, max_entries=max_tree_entries),
         "key_files": key_files,
         "readme": readme_text,
@@ -337,13 +356,14 @@ def fetch_files_impl(
     paths: list[str],
     max_file_chars: int = 16000,
     default_branch: str | None = None,
+    ref: str = "",
 ) -> dict[str, Any]:
-    """Fetch selected files from a repository default branch."""
+    """Fetch selected files from a repository branch, tag, or commit ref."""
     owner, repo = parse_github_repo_url(repo_url)
-    selected_default_branch = default_branch
-    if not selected_default_branch:
+    selected_ref = ref or default_branch
+    if not selected_ref:
         repo_meta = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}")
-        selected_default_branch = repo_meta.get("default_branch", "main")
+        selected_ref = repo_meta.get("default_branch", "main")
 
     out: dict[str, str] = {}
     for path in paths:
@@ -352,13 +372,14 @@ def fetch_files_impl(
             continue
         try:
             out[cleaned_path] = fetch_file_content(
-                owner, repo, cleaned_path, selected_default_branch, max_file_chars
+                owner, repo, cleaned_path, selected_ref, max_file_chars
             )
         except Exception as error:  # pragma: no cover - defensive behavior unchanged
             out[cleaned_path] = f"[Could not fetch {cleaned_path}: {type(error).__name__}]"
 
     return {
         "repo_url": repo_url,
-        "default_branch": selected_default_branch,
+        "default_branch": selected_ref,
+        "ref": selected_ref,
         "files": out,
     }

@@ -112,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=12000,
         help="Max characters captured per sampled file.",
     )
+    parser.add_argument(
+        "--ref",
+        default="",
+        help="Git ref to analyze (branch, tag, or commit SHA). Default: repo default branch.",
+    )
     parser.add_argument("--price-in", type=float, default=None, help="Override input $/1M tokens.")
     parser.add_argument(
         "--price-out", type=float, default=None, help="Override output $/1M tokens."
@@ -187,6 +192,7 @@ def main() -> None:
             max_tree_entries=max(0, args.max_tree_entries),
             max_key_files=max(0, args.max_key_files),
             max_file_chars=max(0, args.max_file_chars),
+            ref=args.ref,
             verbose=args.verbose,
             diagnostics=diagnostics,
         )

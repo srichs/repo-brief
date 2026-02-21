@@ -20,6 +20,7 @@ def fetch_repo_context(
     max_tree_entries: int = 350,
     max_key_files: int = 12,
     max_file_chars: int = 12000,
+    ref: str = "",
 ) -> dict[str, Any]:
     """Agents tool wrapper for repository metadata and content sampling."""
     return fetch_repo_context_impl(
@@ -28,6 +29,7 @@ def fetch_repo_context(
         max_tree_entries=max_tree_entries,
         max_key_files=max_key_files,
         max_file_chars=max_file_chars,
+        ref=ref,
     )
 
 
@@ -37,6 +39,7 @@ def fetch_files(
     paths: list[str],
     max_file_chars: int = 16000,
     default_branch: str | None = None,
+    ref: str = "",
 ) -> dict[str, Any]:
     """Agents tool wrapper for fetching specific repository files."""
     return fetch_files_impl(
@@ -44,6 +47,7 @@ def fetch_files(
         paths=paths,
         max_file_chars=max_file_chars,
         default_branch=default_branch,
+        ref=ref,
     )
 
 
@@ -87,13 +91,13 @@ DeepDiveAgent = Agent(
         """
         You are a staff engineer. You will be given:
         - the repo URL
-        - the repository default branch
+        - the repository ref to use for file fetches (branch/tag/commit SHA)
         - the current briefing (markdown)
         - a list of file paths to fetch
 
         Use the tool to fetch those files, then improve the briefing with sharper, more
         accurate details. Be explicit about what is supported by the files vs inferred.
-        When calling the tool, pass through the default branch provided in the input.
+        When calling the tool, pass through the ref provided in the input.
 
         OUTPUT MUST BE VALID JSON with this schema:
         {
@@ -222,6 +226,7 @@ def run_briefing_loop(
     max_tree_entries: int = 350,
     max_key_files: int = 12,
     max_file_chars: int = 12000,
+    ref: str = "",
     verbose: bool = False,
     diagnostics: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -237,10 +242,11 @@ def run_briefing_loop(
         max_tree_entries=max_tree_entries,
         max_key_files=max_key_files,
         max_file_chars=max_file_chars,
+        ref=ref,
     )
     log(
         "repo context: "
-        f"default_branch={repo_context.get('default_branch', 'main')} "
+        f"default_branch={repo_context.get('default_branch') or repo_context.get('ref', 'main')} "
         f"tree_entries={len(repo_context.get('tree_summary', '').splitlines())} "
         f"key_files={repo_context.get('key_files', [])}"
     )
@@ -253,6 +259,7 @@ def run_briefing_loop(
     overview_prompt = json.dumps(
         {
             "repo_url": repo_url,
+            "ref": repo_context.get("ref", ref),
             "repo_context": repo_context,
             "instruction": "Analyze this repo context and produce the required JSON output.",
         },
@@ -292,7 +299,10 @@ def run_briefing_loop(
         deep_prompt = json.dumps(
             {
                 "repo_url": repo_url,
-                "default_branch": repo_context.get("default_branch", "main"),
+                "default_branch": repo_context.get("default_branch")
+                or repo_context.get("ref", ref)
+                or "main",
+                "ref": repo_context.get("ref", ref),
                 "current_briefing_markdown": briefing,
                 "inspect_these_paths": files_to_inspect,
                 "instruction": "Fetch these files and improve the briefing JSON output.",
