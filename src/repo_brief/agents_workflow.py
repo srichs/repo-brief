@@ -6,7 +6,7 @@ import json
 import textwrap
 from typing import Any
 
-from agents import Agent, Runner, function_tool
+from agents import Agent, RunConfig, Runner, function_tool
 
 from .budget import Pricing, estimate_cost_usd, usage_totals
 from .github_client import fetch_files_impl, fetch_repo_context_impl
@@ -206,7 +206,12 @@ def run_briefing_loop(
         },
         ensure_ascii=False,
     )
-    overview_result = Runner.run_sync(OverviewAgent, overview_prompt, max_turns=max_turns)
+    overview_result = Runner.run_sync(
+        OverviewAgent,
+        overview_prompt,
+        max_turns=max_turns,
+        run_config=RunConfig(model=model),
+    )
     overview_usage = usage_totals(overview_result)
     overview_cost = estimate_cost_usd(overview_result, pricing)
 
@@ -237,7 +242,12 @@ def run_briefing_loop(
             ensure_ascii=False,
         )
 
-        deep_result = Runner.run_sync(DeepDiveAgent, deep_prompt, max_turns=max_turns)
+        deep_result = Runner.run_sync(
+            DeepDiveAgent,
+            deep_prompt,
+            max_turns=max_turns,
+            run_config=RunConfig(model=model),
+        )
         deep_usage = usage_totals(deep_result)
         deep_cost = estimate_cost_usd(deep_result, pricing)
 
@@ -261,7 +271,12 @@ def run_briefing_loop(
             },
             ensure_ascii=False,
         )
-        rp_result = Runner.run_sync(ReadingPlanAgent, rp_prompt, max_turns=max_turns)
+        rp_result = Runner.run_sync(
+            ReadingPlanAgent,
+            rp_prompt,
+            max_turns=max_turns,
+            run_config=RunConfig(model=model),
+        )
         rp_usage = usage_totals(rp_result)
         rp_cost = estimate_cost_usd(rp_result, pricing)
 

@@ -14,7 +14,6 @@ import requests
 from . import __version__
 
 GITHUB_API = "https://api.github.com"
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 DEFAULT_TIMEOUT_SECONDS = 25
 MAX_RETRIES = 3
 BACKOFF_BASE_SECONDS = 0.5
@@ -31,13 +30,14 @@ def parse_github_repo_url(repo_url: str) -> tuple[str, str]:
 
 def gh_headers() -> dict[str, str]:
     """Build GitHub API headers, including auth when available."""
+    github_token = os.getenv("GITHUB_TOKEN")
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": f"repo-brief/{__version__}",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    if GITHUB_TOKEN:
-        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
     return headers
 
 
