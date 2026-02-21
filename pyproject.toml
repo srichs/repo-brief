@@ -35,10 +35,11 @@ dev = [
   "types-requests>=2.32.0.20241016",
   "sphinx>=8.1.0",
   "furo>=2024.8.6",
+  "pre-commit>=4.0.0",
 ]
 
 [project.scripts]
-repo-brief = "repo_brief.repo_brief:main"
+repo-brief = "repo_brief.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

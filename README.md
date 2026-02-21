@@ -59,6 +59,16 @@ repo-brief https://github.com/OWNER/REPO \
 
 ## Development
 
+Install development tooling and configure hooks:
+
+```bash
+pip install -e .[dev]
+pre-commit install
+pre-commit run --all-files
+```
+
+Quality checks:
+
 ```bash
 pytest
 ruff format --check .
