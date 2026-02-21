@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import random
 import re
@@ -63,13 +64,18 @@ def _rate_limit_error(url: str, response: requests.Response) -> RuntimeError:
     )
 
 
-def safe_get_json(url: str, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> Any:
+def safe_get_json(
+    url: str,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    session: requests.Session | None = None,
+) -> Any:
     """Fetch JSON from a URL with small transient-error retries."""
     last_error: Exception | None = None
+    session_obj = session or requests.Session()
 
     for attempt in range(MAX_RETRIES + 1):
         try:
-            response = requests.get(url, headers=gh_headers(), timeout=timeout)
+            response = session_obj.get(url, headers=gh_headers(), timeout=timeout)
             if response.status_code == 403 and response.headers.get("X-RateLimit-Remaining") == "0":
                 raise _rate_limit_error(url, response)
             if _should_retry_status(response.status_code) and attempt < MAX_RETRIES:
@@ -81,7 +87,15 @@ def safe_get_json(url: str, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> Any:
                 time.sleep(sleep_for)
                 continue
             response.raise_for_status()
-            return response.json()
+            try:
+                return response.json()
+            except json.JSONDecodeError as error:
+                snippet = response.text[:200].replace("\n", "\\n")
+                raise RuntimeError(
+                    "GitHub API returned non-JSON response "
+                    f"(status {response.status_code}) for {url}. "
+                    f"Check authentication/rate limits. Body snippet: {snippet}"
+                ) from error
         except requests.HTTPError as error:
             status_code = error.response.status_code if error.response is not None else None
             if (

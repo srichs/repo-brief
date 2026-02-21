@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
+
+from repo_brief import __version__
 
 project = "repo-brief"
 author = "repo-brief contributors"
 copyright = f"{datetime.now().year}, {author}"
-release = "0.1.0"
+try:
+    release = version("repo-brief")
+except PackageNotFoundError:
+    release = __version__
 
 extensions = [
     "sphinx.ext.autodoc",

@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import pytest
 import requests
 
+from repo_brief import __version__, cli, github_client
 from repo_brief import agents_workflow as workflow
-from repo_brief import cli, github_client
 from repo_brief.budget import Pricing, validate_price_overrides
 from repo_brief.github_client import parse_github_repo_url, truncate
 
@@ -84,6 +84,61 @@ def test_pick_key_files_includes_top_level_conventional_files_and_respects_max()
 def test_validate_price_overrides_requires_both_values() -> None:
     with pytest.raises(ValueError):
         validate_price_overrides(price_in=1.0, price_out=None)
+
+
+def test_cli_version_flag_prints_version_and_exits_zero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.argv", ["repo-brief", "--version"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 0
+    assert captured.out.strip() == f"repo-brief {__version__}"
+
+
+def test_cli_exits_with_code_2_when_openai_api_key_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("sys.argv", ["repo-brief", "https://github.com/openai/openai-python"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "OPENAI_API_KEY is required" in captured.err
+
+
+def test_safe_get_json_raises_runtime_error_for_non_json_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        status_code = 200
+        headers: dict[str, str] = {}
+        text = "<!doctype html><html>oops</html>"
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            raise json.JSONDecodeError("bad", self.text, 0)
+
+    monkeypatch.setattr(
+        github_client.requests.Session, "get", lambda _self, *_args, **_kwargs: Response()
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        github_client.safe_get_json("https://api.github.com/repos/openai/openai-python")
+
+    message = str(exc_info.value)
+    assert "status 200" in message
+    assert "https://api.github.com/repos/openai/openai-python" in message
+    assert "Body snippet" in message
 
 
 class _DummyResult:
@@ -216,14 +271,14 @@ def test_safe_get_json_retries_transient_errors(monkeypatch: pytest.MonkeyPatch)
         def json(self) -> dict[str, object]:
             return self._payload
 
-    def fake_get(url: str, headers: dict[str, str], timeout: int) -> Response:
-        del url, headers, timeout
+    def fake_get(_self: object, url: str, headers: dict[str, str], timeout: int) -> Response:
+        del _self, url, headers, timeout
         calls["count"] += 1
         if calls["count"] < 3:
             return Response(502, {})
         return Response(200, {"ok": True})
 
-    monkeypatch.setattr(github_client.requests, "get", fake_get)
+    monkeypatch.setattr(github_client.requests.Session, "get", fake_get)
     monkeypatch.setattr(github_client.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(github_client.random, "uniform", lambda _a, _b: 0.0)
 
@@ -254,14 +309,14 @@ def test_safe_get_json_uses_retry_after_for_429(monkeypatch: pytest.MonkeyPatch)
         def json(self) -> dict[str, object]:
             return self._payload
 
-    def fake_get(url: str, headers: dict[str, str], timeout: int) -> Response:
-        del url, headers, timeout
+    def fake_get(_self: object, url: str, headers: dict[str, str], timeout: int) -> Response:
+        del _self, url, headers, timeout
         calls["count"] += 1
         if calls["count"] == 1:
             return Response(429, {}, retry_after="7")
         return Response(200, {"ok": True})
 
-    monkeypatch.setattr(github_client.requests, "get", fake_get)
+    monkeypatch.setattr(github_client.requests.Session, "get", fake_get)
     monkeypatch.setattr(github_client.time, "sleep", lambda seconds: sleeps.append(seconds))
 
     payload = github_client.safe_get_json("https://api.github.com/repos/openai/openai-python")
@@ -282,7 +337,9 @@ def test_safe_get_json_raises_clear_error_on_rate_limit(monkeypatch: pytest.Monk
         def json(self) -> dict[str, object]:
             return {}
 
-    monkeypatch.setattr(github_client.requests, "get", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(
+        github_client.requests.Session, "get", lambda _self, *_args, **_kwargs: Response()
+    )
 
     with pytest.raises(RuntimeError) as exc_info:
         github_client.safe_get_json("https://api.github.com/repos/openai/openai-python")
