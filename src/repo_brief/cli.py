@@ -11,8 +11,6 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
 
 def render_output(result: dict[str, Any], output_format: str) -> str:
     """Render orchestrated results as JSON or markdown output."""
@@ -22,6 +20,8 @@ def render_output(result: dict[str, Any], output_format: str) -> str:
     parts = [result["briefing_markdown"].rstrip()]
     if result.get("reading_plan_markdown"):
         parts.append(result["reading_plan_markdown"].rstrip())
+    elif result.get("stopped_reason") == "budget_exceeded":
+        parts.append("_Reading plan skipped because the configured budget limit was reached._")
 
     parts.extend(
         [
@@ -125,6 +125,7 @@ def main() -> None:
 
     parser = build_parser()
     args = parser.parse_args()
+    load_dotenv()
 
     try:
         parse_github_repo_url(args.repo_url)

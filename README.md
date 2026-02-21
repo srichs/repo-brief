@@ -82,4 +82,3 @@ sphinx-build -b html docs docs/_build/html
 - Only public repositories are supported by default.
 - If the model emits non-JSON content, the CLI falls back gracefully.
 - GitHub and model/API errors are surfaced with non-zero exit codes.
-- TODO: add a repository license file and project license metadata.

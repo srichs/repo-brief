@@ -46,6 +46,41 @@ def test_truncate_handles_non_positive_limit() -> None:
     assert truncate("abcdef", max_chars=-1) == ""
 
 
+def test_tree_summary_uses_type_prefixes_and_stable_ordering() -> None:
+    paths = [
+        "src/",
+        "README.md",
+        "src/main.py",
+        "docs/",
+        "docs/index.rst",
+    ]
+
+    summary = github_client.tree_summary(paths, max_entries=5)
+
+    assert summary.splitlines() == [
+        "📄 README.md",
+        "📁 docs/",
+        "📄 docs/index.rst",
+        "📁 src/",
+        "📄 src/main.py",
+    ]
+
+
+def test_pick_key_files_includes_top_level_conventional_files_and_respects_max() -> None:
+    tree_index = {
+        "README.md": "blob",
+        "CONTRIBUTING.md": "blob",
+        "LICENSE": "blob",
+        "pyproject.toml": "blob",
+        "src/main.py": "blob",
+        "docs/": "tree",
+    }
+
+    selected = github_client.pick_key_files(tree_index, max_files=3)
+
+    assert selected == ["README.md", "CONTRIBUTING.md", "LICENSE"]
+
+
 def test_validate_price_overrides_requires_both_values() -> None:
     with pytest.raises(ValueError):
         validate_price_overrides(price_in=1.0, price_out=None)
@@ -255,6 +290,20 @@ def test_safe_get_json_raises_clear_error_on_rate_limit(monkeypatch: pytest.Monk
     message = str(exc_info.value)
     assert "Set GITHUB_TOKEN" in message
     assert "1700000000" in message
+
+
+def test_render_output_mentions_skipped_reading_plan_on_budget_limit() -> None:
+    rendered = cli.render_output(
+        {
+            "briefing_markdown": "brief",
+            "reading_plan_markdown": "",
+            "usage": {"estimated_cost_usd": 0.0, "total_tokens": 1, "requests": 1},
+            "stopped_reason": "budget_exceeded",
+        },
+        output_format="markdown",
+    )
+
+    assert "Reading plan skipped because the configured budget limit was reached." in rendered
 
 
 def test_cli_passes_context_limit_flags(monkeypatch: pytest.MonkeyPatch) -> None:

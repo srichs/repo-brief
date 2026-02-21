@@ -11,7 +11,7 @@ version = "0.1.0"
 description = "Agentic CLI for generating GitHub repository briefings and reading plans"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -45,6 +45,7 @@ repo-brief = "repo_brief.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+license-files = ["LICENSE"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
