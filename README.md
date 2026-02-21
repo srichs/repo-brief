@@ -63,6 +63,12 @@ repo-brief https://github.com/OWNER/REPO \
 repo-brief https://github.com/OWNER/REPO --ref feature/new-flow
 ```
 
+### Check installed version
+
+```bash
+repo-brief --version
+```
+
 ## Development
 
 Install development tooling and configure hooks:
