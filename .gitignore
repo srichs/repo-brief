@@ -1,3 +1,7 @@
+src/repo_brief/__pycache__
+src/repo_brief/.env
+.venv
+dist
 __pycache__/
 *.py[cod]
 *.egg-info/
