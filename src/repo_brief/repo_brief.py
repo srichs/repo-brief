@@ -174,7 +174,7 @@ def _pick_key_files(tree_index: dict[str, str], max_files: int) -> list[str]:
     return uniq[:max_files]
 
 
-def _fetch_repo_tree(owner: str, repo: str, branch: str) -> list[dict[str, Any]]:
+def _fetch_repo_tree(owner: str, repo: str, branch: str) -> Any | list[dict[str, Any]]:
     """Fetch a repository tree recursively for a specific branch."""
     branch_obj = _safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/branches/{branch}")
     sha = branch_obj["commit"]["sha"]
