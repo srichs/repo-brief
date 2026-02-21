@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("repo_url", nargs="?", help="e.g. https://github.com/OWNER/REPO")
-    parser.add_argument("-V", "--version", action="version", version=f"repo-brief {__version__}")
+    parser.add_argument("-V", "--version", action="store_true", help="Print package version.")
     parser.add_argument(
         "--model",
         default="gpt-4.1-mini",
@@ -67,6 +67,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--format", choices=["markdown", "json"], default="markdown", help="Output format."
     )
     parser.add_argument("--output", help="Write output to a file instead of stdout.")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print workflow diagnostics to stderr while keeping stdout output unchanged.",
+    )
     parser.add_argument(
         "--max-iters", type=int, default=2, help="Deep-dive iterations after overview."
     )
@@ -130,6 +135,10 @@ def main() -> None:
     args = parser.parse_args()
     load_dotenv()
 
+    if args.version:
+        print(__version__)
+        sys.exit(0)
+
     if not args.repo_url:
         parser.error("the following arguments are required: repo_url")
 
@@ -142,7 +151,7 @@ def main() -> None:
         sys.exit(2)
 
     try:
-        parse_github_repo_url(args.repo_url)
+        owner, repo = parse_github_repo_url(args.repo_url)
     except ValueError as exc:
         print(
             f"ERROR: Invalid repository URL '{args.repo_url}'. Expected format: "
@@ -160,6 +169,11 @@ def main() -> None:
 
     pricing = Pricing.for_model(args.model, args.price_in, args.price_out, args.price_cached_in)
 
+    if args.verbose:
+        print(f"parsed repo: owner={owner}, repo={repo}", file=sys.stderr)
+
+    diagnostics = (lambda message: print(message, file=sys.stderr)) if args.verbose else None
+
     try:
         result = run_briefing_loop(
             repo_url=args.repo_url,
@@ -173,6 +187,8 @@ def main() -> None:
             max_tree_entries=max(0, args.max_tree_entries),
             max_key_files=max(0, args.max_key_files),
             max_file_chars=max(0, args.max_file_chars),
+            verbose=args.verbose,
+            diagnostics=diagnostics,
         )
         write_output(render_output(result, args.format), args.output)
     except KeyboardInterrupt:

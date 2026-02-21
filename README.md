@@ -64,7 +64,7 @@ Install development tooling and configure hooks:
 ```bash
 pip install -e .[dev]
 pre-commit install
-pre-commit run --all-files
+pre-commit run --all-files  # runs ruff format, ruff lint, and mypy hooks
 ```
 
 Quality checks:
