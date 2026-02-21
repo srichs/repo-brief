@@ -142,7 +142,7 @@ def build_tree_index(tree: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def tree_summary(paths: list[str], max_entries: int = 300) -> str:
-    """Render a sorted tree summary with file/folder icons."""
+    """Render a sorted tree summary with 📁 for directories and 📄 for files."""
     ordered_paths = sorted(paths, key=lambda path: (path.count("/"), path))[:max_entries]
     return "\n".join(f"{'📁' if path.endswith('/') else '📄'} {path}" for path in ordered_paths)
 
