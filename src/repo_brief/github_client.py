@@ -166,7 +166,8 @@ def build_tree_index(tree: list[dict[str, Any]]) -> dict[str, str]:
 
 def tree_summary(paths: list[str], max_entries: int = 300) -> str:
     """Render a sorted tree summary with 📁 for directories and 📄 for files."""
-    ordered_paths = sorted(paths, key=lambda path: (path.count("/"), path))[:max_entries]
+    normalized_paths = [path.strip() for path in paths if path.strip()]
+    ordered_paths = sorted(normalized_paths, key=lambda path: (path.count("/"), path))[:max_entries]
     return "\n".join(f"{'📁' if path.endswith('/') else '📄'} {path}" for path in ordered_paths)
 
 
@@ -240,31 +241,52 @@ def pick_key_files(tree_index: dict[str, str], max_files: int) -> list[str]:
     return unique[:max_files]
 
 
-def fetch_repo_tree(owner: str, repo: str, branch: str) -> list[dict[str, Any]]:
+def fetch_repo_tree(
+    owner: str,
+    repo: str,
+    branch: str,
+    session: requests.Session | None = None,
+) -> list[dict[str, Any]]:
     """Fetch a repository tree recursively for a specific branch or ref."""
     tree_sha = ""
     try:
-        branch_obj = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/branches/{branch}")
+        branch_obj = safe_get_json(
+            f"{GITHUB_API}/repos/{owner}/{repo}/branches/{branch}",
+            session=session,
+        )
         tree_sha = str(
             (((branch_obj.get("commit") or {}).get("commit") or {}).get("tree") or {}).get("sha")
             or ""
         )
     except RuntimeError:
-        commit_obj = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/commits/{branch}")
+        commit_obj = safe_get_json(
+            f"{GITHUB_API}/repos/{owner}/{repo}/commits/{branch}",
+            session=session,
+        )
         tree_sha = ((commit_obj.get("commit") or {}).get("tree") or {}).get("sha", "")
 
     if not tree_sha:
         raise RuntimeError(f"Could not resolve repository tree SHA for {owner}/{repo}@{branch}")
 
-    tree_obj = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{tree_sha}?recursive=1")
+    tree_obj = safe_get_json(
+        f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{tree_sha}?recursive=1",
+        session=session,
+    )
     tree = tree_obj.get("tree", []) if isinstance(tree_obj, dict) else []
     return tree if isinstance(tree, list) else []
 
 
-def fetch_file_content(owner: str, repo: str, path: str, ref: str, max_chars: int) -> str:
+def fetch_file_content(
+    owner: str,
+    repo: str,
+    path: str,
+    ref: str,
+    max_chars: int,
+    session: requests.Session | None = None,
+) -> str:
     """Fetch and decode file content from GitHub repository contents API."""
     url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}?ref={ref}"
-    obj = safe_get_json(url)
+    obj = safe_get_json(url, session=session)
     if isinstance(obj, dict) and obj.get("type") == "file":
         content_b64 = obj.get("content", "")
         if content_b64:
@@ -283,54 +305,66 @@ def fetch_repo_context_impl(
 ) -> dict[str, Any]:
     """Collect high-signal repository context for prompting downstream agents."""
     owner, repo = parse_github_repo_url(repo_url)
-    repo_meta: dict[str, Any] = {}
-    resolved_ref = ref
-    if not resolved_ref:
-        repo_meta = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}")
-        resolved_ref = repo_meta.get("default_branch", "main")
+    with requests.Session() as session:
+        repo_meta: dict[str, Any] = {}
+        resolved_ref = ref
+        if not resolved_ref:
+            repo_meta = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}", session=session)
+            resolved_ref = repo_meta.get("default_branch", "main")
 
-    tree = fetch_repo_tree(owner, repo, resolved_ref)
-    tree_index = build_tree_index(tree)
+        tree = fetch_repo_tree(owner, repo, resolved_ref, session=session)
+        tree_index = build_tree_index(tree)
 
-    paths_for_summary: list[str] = []
-    for path, item_type in tree_index.items():
-        lower = path.lower()
-        if lower.startswith(("node_modules/", "dist/", "build/", ".git/", ".venv/", "venv/")):
-            continue
-        if item_type == "tree":
-            paths_for_summary.append(path.rstrip("/") + "/")
+        paths_for_summary: list[str] = []
+        for path, item_type in tree_index.items():
+            lower = path.lower()
+            if lower.startswith(
+                (
+                    "node_modules/",
+                    "dist/",
+                    "build/",
+                    ".git/",
+                    ".venv/",
+                    "venv/",
+                )
+            ):
+                continue
+            if item_type == "tree":
+                paths_for_summary.append(path.rstrip("/") + "/")
+            else:
+                paths_for_summary.append(path)
+
+        key_files = pick_key_files(tree_index, max_files=max_key_files)
+
+        files_content: dict[str, str] = {}
+        for file_path in key_files:
+            try:
+                files_content[file_path] = fetch_file_content(
+                    owner,
+                    repo,
+                    file_path,
+                    resolved_ref,
+                    max_file_chars,
+                    session=session,
+                )
+            except Exception:
+                files_content[file_path] = ""
+
+        readme_text = files_content.get("README.md", "")
+        if not readme_text:
+            try:
+                readme_obj = safe_get_json(
+                    f"{GITHUB_API}/repos/{owner}/{repo}/readme?ref={resolved_ref}",
+                    session=session,
+                )
+                content_b64 = readme_obj.get("content", "")
+                if content_b64:
+                    readme_text = base64.b64decode(content_b64).decode("utf-8", errors="replace")
+                    readme_text = truncate(readme_text, max_readme_chars)
+            except Exception:
+                readme_text = ""
         else:
-            paths_for_summary.append(path)
-
-    key_files = pick_key_files(tree_index, max_files=max_key_files)
-
-    files_content: dict[str, str] = {}
-    for file_path in key_files:
-        try:
-            files_content[file_path] = fetch_file_content(
-                owner,
-                repo,
-                file_path,
-                resolved_ref,
-                max_file_chars,
-            )
-        except Exception:
-            files_content[file_path] = ""
-
-    readme_text = files_content.get("README.md", "")
-    if not readme_text:
-        try:
-            readme_obj = safe_get_json(
-                f"{GITHUB_API}/repos/{owner}/{repo}/readme?ref={resolved_ref}"
-            )
-            content_b64 = readme_obj.get("content", "")
-            if content_b64:
-                readme_text = base64.b64decode(content_b64).decode("utf-8", errors="replace")
-                readme_text = truncate(readme_text, max_readme_chars)
-        except Exception:
-            readme_text = ""
-    else:
-        readme_text = truncate(readme_text, max_readme_chars)
+            readme_text = truncate(readme_text, max_readme_chars)
 
     return {
         "repo_url": repo_url,
@@ -360,22 +394,28 @@ def fetch_files_impl(
 ) -> dict[str, Any]:
     """Fetch selected files from a repository branch, tag, or commit ref."""
     owner, repo = parse_github_repo_url(repo_url)
-    selected_ref = ref or default_branch
-    if not selected_ref:
-        repo_meta = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}")
-        selected_ref = repo_meta.get("default_branch", "main")
+    with requests.Session() as session:
+        selected_ref = ref or default_branch
+        if not selected_ref:
+            repo_meta = safe_get_json(f"{GITHUB_API}/repos/{owner}/{repo}", session=session)
+            selected_ref = repo_meta.get("default_branch", "main")
 
-    out: dict[str, str] = {}
-    for path in paths:
-        cleaned_path = path.strip().lstrip("/")
-        if not cleaned_path:
-            continue
-        try:
-            out[cleaned_path] = fetch_file_content(
-                owner, repo, cleaned_path, selected_ref, max_file_chars
-            )
-        except Exception as error:  # pragma: no cover - defensive behavior unchanged
-            out[cleaned_path] = f"[Could not fetch {cleaned_path}: {type(error).__name__}]"
+        out: dict[str, str] = {}
+        for path in paths:
+            cleaned_path = path.strip().lstrip("/")
+            if not cleaned_path:
+                continue
+            try:
+                out[cleaned_path] = fetch_file_content(
+                    owner,
+                    repo,
+                    cleaned_path,
+                    selected_ref,
+                    max_file_chars,
+                    session=session,
+                )
+            except Exception as error:  # pragma: no cover - defensive behavior unchanged
+                out[cleaned_path] = f"[Could not fetch {cleaned_path}: {type(error).__name__}]"
 
     return {
         "repo_url": repo_url,

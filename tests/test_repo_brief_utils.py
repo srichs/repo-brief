@@ -48,10 +48,10 @@ def test_truncate_handles_non_positive_limit() -> None:
 
 def test_tree_summary_uses_type_prefixes_and_stable_ordering() -> None:
     paths = [
-        "src/",
+        "  src/",
         "README.md",
-        "src/main.py",
-        "docs/",
+        "src/main.py  ",
+        " docs/",
         "docs/index.rst",
     ]
 
@@ -185,6 +185,51 @@ def test_run_briefing_loop_fetches_repo_context_once(monkeypatch: pytest.MonkeyP
     )
 
     assert calls["count"] == 1
+
+
+def test_run_briefing_loop_passes_ref_to_repo_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_repo_context(repo_url: str, **kwargs: object) -> dict[str, object]:
+        del repo_url
+        captured.update(kwargs)
+        return {
+            "tree_summary": "📄 README.md",
+            "key_files": ["README.md"],
+            "default_branch": "main",
+            "ref": kwargs.get("ref", ""),
+        }
+
+    def fake_run_sync(
+        agent: object,
+        prompt: str,
+        max_turns: int,
+        run_config: object,
+    ) -> _DummyResult:
+        del prompt, max_turns, run_config
+        if agent is workflow.OverviewAgent:
+            return _DummyResult({"briefing_markdown": "brief", "files_to_inspect": []})
+        return _DummyResult({"reading_plan_markdown": "plan"})
+
+    monkeypatch.setattr(workflow, "fetch_repo_context_impl", fake_repo_context)
+    monkeypatch.setattr(workflow.Runner, "run_sync", fake_run_sync)
+    monkeypatch.setattr(
+        workflow, "usage_totals", lambda _result: {"total_tokens": 0, "requests": 1}
+    )
+    monkeypatch.setattr(workflow, "estimate_cost_usd", lambda _result, _pricing: 0.0)
+
+    workflow.run_briefing_loop(
+        repo_url="https://github.com/openai/openai-python",
+        model="gpt-4.1-mini",
+        max_iters=1,
+        max_turns=1,
+        max_cost=0.0,
+        max_tokens=0,
+        pricing=SimpleNamespace(in_per_1m=0.0, out_per_1m=0.0, cached_in_per_1m=0.0),
+        ref="release/v1",
+    )
+
+    assert captured["ref"] == "release/v1"
 
 
 def test_gh_headers_reads_github_token_at_call_time(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -528,7 +573,12 @@ def test_fetch_repo_context_impl_uses_provided_ref_without_repo_metadata_call(
     monkeypatch.setattr(
         github_client,
         "fetch_file_content",
-        lambda owner, repo, path, ref, max_chars: f"{owner}/{repo}:{path}@{ref}:{max_chars}",
+        lambda owner,
+        repo,
+        path,
+        ref,
+        max_chars,
+        session=None: f"{owner}/{repo}:{path}@{ref}:{max_chars}",
     )
 
     payload = github_client.fetch_repo_context_impl(
@@ -556,7 +606,12 @@ def test_fetch_files_impl_uses_provided_default_branch_without_repo_metadata_cal
     monkeypatch.setattr(
         github_client,
         "fetch_file_content",
-        lambda owner, repo, path, ref, max_chars: f"{owner}/{repo}:{path}@{ref}:{max_chars}",
+        lambda owner,
+        repo,
+        path,
+        ref,
+        max_chars,
+        session=None: f"{owner}/{repo}:{path}@{ref}:{max_chars}",
     )
 
     payload = github_client.fetch_files_impl(
