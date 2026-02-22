@@ -165,10 +165,11 @@ def build_tree_index(tree: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def tree_summary(paths: list[str], max_entries: int = 300) -> str:
-    """Render a sorted tree summary with 📁 for directories and 📄 for files."""
+    """Render a sorted tree summary using 📁 for directories and 📄 for files."""
     normalized_paths = [path.strip() for path in paths if path.strip()]
     ordered_paths = sorted(normalized_paths, key=lambda path: (path.count("/"), path))[:max_entries]
-    return "\n".join(f"{'📁' if path.endswith('/') else '📄'} {path}" for path in ordered_paths)
+    lines = [f"{'📁' if path.endswith('/') else '📄'} {path}" for path in ordered_paths]
+    return "\n".join(lines)
 
 
 def pick_key_files(tree_index: dict[str, str], max_files: int) -> list[str]:
@@ -287,12 +288,15 @@ def fetch_file_content(
     """Fetch and decode file content from GitHub repository contents API."""
     url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}?ref={ref}"
     obj = safe_get_json(url, session=session)
-    if isinstance(obj, dict) and obj.get("type") == "file":
-        content_b64 = obj.get("content", "")
-        if content_b64:
-            raw = base64.b64decode(content_b64).decode("utf-8", errors="replace")
-            return truncate(raw, max_chars)
-    return ""
+    if not isinstance(obj, dict) or obj.get("type") != "file":
+        return "[unavailable content: not a file]"
+
+    content_b64 = obj.get("content", "")
+    if not content_b64:
+        return "[unavailable content: empty or non-text]"
+
+    raw = base64.b64decode(content_b64).decode("utf-8", errors="replace")
+    return truncate(raw, max_chars)
 
 
 def fetch_repo_context_impl(
@@ -415,7 +419,9 @@ def fetch_files_impl(
                     session=session,
                 )
             except Exception as error:  # pragma: no cover - defensive behavior unchanged
-                out[cleaned_path] = f"[Could not fetch {cleaned_path}: {type(error).__name__}]"
+                out[cleaned_path] = (
+                    f"[Could not fetch {cleaned_path} at {selected_ref}: {type(error).__name__}]"
+                )
 
     return {
         "repo_url": repo_url,
