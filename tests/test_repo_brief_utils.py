@@ -30,9 +30,29 @@ def test_parse_github_repo_url_rejects_invalid_url(bad_url: str) -> None:
         parse_github_repo_url(bad_url)
 
 
-def test_json_fallback_uses_fallback_key_for_non_json() -> None:
-    out = workflow.json_or_fallback("plain text", fallback_key="reading_plan_markdown")
-    assert out["reading_plan_markdown"] == "plain text"
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('{"briefing_markdown": "raw", "files_to_inspect": ["a.py"]}', "raw"),
+        (
+            '```json\n{"briefing_markdown": "fenced", "files_to_inspect": ["b.py"]}\n```',
+            "fenced",
+        ),
+        (
+            'Preface\n{"briefing_markdown": "embedded", "files_to_inspect": ["c.py"]}\nPostscript',
+            "embedded",
+        ),
+    ],
+)
+def test_json_or_fallback_parses_structured_json(text: str, expected: str) -> None:
+    out = workflow.json_or_fallback(text)
+    assert out["briefing_markdown"] == expected
+
+
+def test_json_fallback_uses_fallback_key_for_invalid_json() -> None:
+    text = 'not valid {"briefing_markdown": invalid } text'
+    out = workflow.json_or_fallback(text, fallback_key="reading_plan_markdown")
+    assert out["reading_plan_markdown"] == text
     assert out["files_to_inspect"] == []
 
 
@@ -59,11 +79,11 @@ def test_tree_summary_uses_type_prefixes_and_stable_ordering() -> None:
     summary = github_client.tree_summary(paths, max_entries=5)
 
     assert summary.splitlines() == [
-        "📄 README.md",
-        "📁 docs/",
-        "📄 docs/index.rst",
-        "📁 src/",
-        "📄 src/main.py",
+        "[FILE] README.md",
+        "[DIR] docs/",
+        "[FILE] docs/index.rst",
+        "[DIR] src/",
+        "[FILE] src/main.py",
     ]
 
 
