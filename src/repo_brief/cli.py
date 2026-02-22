@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -12,6 +13,8 @@ from typing import Any
 from dotenv import load_dotenv
 
 from . import __version__
+
+LOGGER = logging.getLogger("repo_brief")
 
 
 def render_output(result: dict[str, Any], output_format: str) -> str:
@@ -39,7 +42,7 @@ def render_output(result: dict[str, Any], output_format: str) -> str:
 
 def write_output(output_text: str, output_path: str | None) -> None:
     """Write rendered output to stdout or a file path."""
-    if not output_path:
+    if not output_path or output_path == "-":
         print(output_text)
         return
     path = Path(output_path)
@@ -67,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--format", choices=["markdown", "json"], default="markdown", help="Output format."
     )
     parser.add_argument("--output", help="Write output to a file instead of stdout.")
+    parser.add_argument(
+        "--no-dotenv",
+        action="store_true",
+        help="Do not load variables from a .env file.",
+    )
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -138,7 +146,10 @@ def main() -> None:
 
     parser = build_parser()
     args = parser.parse_args()
-    load_dotenv()
+    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
+
+    if not args.no_dotenv:
+        load_dotenv()
 
     if args.version:
         print(__version__)
@@ -149,35 +160,33 @@ def main() -> None:
 
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
-        print(
+        LOGGER.error(
             "ERROR: OPENAI_API_KEY is required. Set it in your environment or .env file.",
-            file=sys.stderr,
         )
         sys.exit(2)
 
     try:
         owner, repo = parse_github_repo_url(args.repo_url)
     except ValueError as exc:
-        print(
+        LOGGER.error(
             f"ERROR: Invalid repository URL '{args.repo_url}'. Expected format: "
             "https://github.com/OWNER/REPO",
-            file=sys.stderr,
         )
-        print(f"DETAILS: {exc}", file=sys.stderr)
+        LOGGER.error("DETAILS: %s", exc)
         sys.exit(2)
 
     try:
         validate_price_overrides(args.price_in, args.price_out)
     except ValueError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        LOGGER.error("ERROR: %s", exc)
         sys.exit(2)
 
     pricing = Pricing.for_model(args.model, args.price_in, args.price_out, args.price_cached_in)
 
     if args.verbose:
-        print(f"parsed repo: owner={owner}, repo={repo}", file=sys.stderr)
+        LOGGER.info("parsed repo: owner=%s, repo=%s", owner, repo)
 
-    diagnostics = (lambda message: print(message, file=sys.stderr)) if args.verbose else None
+    diagnostics = LOGGER.info if args.verbose else None
 
     try:
         result = run_briefing_loop(
@@ -198,8 +207,8 @@ def main() -> None:
         )
         write_output(render_output(result, args.format), args.output)
     except KeyboardInterrupt:
-        print("Interrupted by user.", file=sys.stderr)
+        LOGGER.error("Interrupted by user.")
         sys.exit(130)
     except Exception as exc:
-        print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        LOGGER.error("ERROR: %s: %s", type(exc).__name__, exc)
         sys.exit(1)

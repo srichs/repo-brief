@@ -1,4 +1,5 @@
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -101,7 +102,7 @@ def test_cli_version_flag_prints_version_and_exits_zero(
 
 def test_cli_exits_with_code_2_when_openai_api_key_missing(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr("sys.argv", ["repo-brief", "https://github.com/openai/openai-python"])
@@ -109,9 +110,8 @@ def test_cli_exits_with_code_2_when_openai_api_key_missing(
     with pytest.raises(SystemExit) as exc_info:
         cli.main()
 
-    captured = capsys.readouterr()
     assert exc_info.value.code == 2
-    assert "OPENAI_API_KEY is required" in captured.err
+    assert "OPENAI_API_KEY is required" in caplog.text
 
 
 def test_safe_get_json_raises_runtime_error_for_non_json_response(
@@ -477,8 +477,12 @@ def test_cli_passes_ref_to_run_briefing_loop(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_cli_verbose_writes_diagnostics_to_stderr_only(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level(logging.INFO, logger="repo_brief")
+
     def fake_run_briefing_loop(**kwargs: object) -> dict[str, object]:
         diagnostics = kwargs.get("diagnostics")
         assert callable(diagnostics)
@@ -503,8 +507,8 @@ def test_cli_verbose_writes_diagnostics_to_stderr_only(
 
     captured = capsys.readouterr()
     assert "brief" in captured.out
-    assert "stage: overview" in captured.err
-    assert "parsed repo: owner=openai, repo=openai-python" in captured.err
+    assert "stage: overview" in caplog.text
+    assert "parsed repo: owner=openai, repo=openai-python" in caplog.text
 
 
 def test_run_briefing_loop_invalid_overview_json_schema_falls_back_with_warning(

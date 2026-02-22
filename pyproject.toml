@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "repo-brief"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Agentic CLI for generating GitHub repository briefings and reading plans"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -46,6 +46,9 @@ repo-brief = "repo_brief.cli:main"
 [tool.setuptools]
 package-dir = { "" = "src" }
 license-files = ["LICENSE"]
+
+[tool.setuptools.dynamic]
+version = { attr = "repo_brief.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

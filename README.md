@@ -49,12 +49,21 @@ GITHUB_TOKEN=...
 repo-brief https://github.com/OWNER/REPO
 ```
 
+Use `--output -` to force writing the briefing to stdout (equivalent to omitting `--output`).
+
 ### JSON output to file
 
 ```bash
 repo-brief https://github.com/OWNER/REPO \
   --format json \
   --output artifacts/repo-brief.json
+```
+
+
+### Skip loading `.env`
+
+```bash
+repo-brief https://github.com/OWNER/REPO --no-dotenv
 ```
 
 ### Analyze a specific branch/tag/commit
