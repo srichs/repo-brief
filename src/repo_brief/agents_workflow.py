@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import textwrap
 from collections.abc import Callable
 from typing import Any
@@ -180,13 +181,63 @@ def get_final_text(run_result: Any) -> str:
 
 def json_or_fallback(text: str, fallback_key: str = "briefing_markdown") -> dict[str, Any]:
     """Parse model JSON output, or wrap raw text in a fallback dictionary."""
+
+    stripped = text.strip()
+
+    fenced_match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", stripped, flags=re.DOTALL)
+    if fenced_match:
+        stripped = fenced_match.group(1).strip()
+
     try:
-        obj = json.loads(text)
+        obj = json.loads(stripped)
         if isinstance(obj, dict):
             return obj
     except json.JSONDecodeError:
-        pass
+        extracted = _extract_first_json_object(stripped)
+        if extracted is not None:
+            try:
+                obj = json.loads(extracted)
+                if isinstance(obj, dict):
+                    return obj
+            except json.JSONDecodeError:
+                pass
+
     return {fallback_key: text, "files_to_inspect": []}
+
+
+def _extract_first_json_object(text: str) -> str | None:
+    """Extract the first balanced JSON object from free-form text."""
+    candidate = text.strip()
+    start = candidate.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for index in range(start, len(candidate)):
+        char = candidate[index]
+
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return candidate[start : index + 1]
+
+    return None
 
 
 def _is_string_list(value: object) -> bool:
